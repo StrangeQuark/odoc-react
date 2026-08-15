@@ -1,4 +1,13 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import {
   QueryClient,
   QueryClientProvider,
@@ -15,11 +24,30 @@ import {
   type RepositoryBinding,
   type Space,
 } from '../shared/api';
-import { RichDocument, RichTextEditor } from './RichDocument';
+import { type RichTextEditorController } from './RichDocument';
+
+// Editing is a substantial dependency (ProseMirror/Tiptap and rich-media node
+// views), so it should not delay the initial workspace shell.
+const RichDocument = lazy(async () => {
+  const module = await import('./RichDocument');
+  return { default: module.RichDocument };
+});
+const RichTextEditor = lazy(async () => {
+  const module = await import('./RichDocument');
+  return { default: module.RichTextEditor };
+});
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
 });
+
+/**
+ * A synchronous, page-owned check used by workspace navigation before it can
+ * unmount an editor. Keeping this at the workspace boundary means every
+ * navigation surface (space nav, search, destructive actions, and logout)
+ * follows the same safety rule.
+ */
+type EditorExitGuard = () => boolean;
 
 function LoginPage({
   onLogin,
@@ -162,16 +190,28 @@ function AuthenticatedImage({
   useEffect(() => {
     let active = true;
     let objectUrl: string | undefined;
-    void fetchAuthenticatedImage(credentials, path)
+    const abortController = new AbortController();
+    void fetchAuthenticatedImage(credentials, path, abortController.signal)
       .then((blob) => {
-        objectUrl = URL.createObjectURL(blob);
-        if (active) setSource(objectUrl);
+        const nextObjectUrl = URL.createObjectURL(blob);
+        if (active) {
+          objectUrl = nextObjectUrl;
+          setSource(nextObjectUrl);
+        } else {
+          URL.revokeObjectURL(nextObjectUrl);
+        }
       })
-      .catch(() => {
-        if (active) setSource(null);
+      .catch((error: unknown) => {
+        if (
+          active &&
+          !(error instanceof DOMException && error.name === 'AbortError')
+        ) {
+          setSource(null);
+        }
       });
     return () => {
       active = false;
+      abortController.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [credentials, path]);
@@ -193,6 +233,14 @@ function Workspace({
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [newPageOpen, setNewPageOpen] = useState(false);
   const [newRepositoryOpen, setNewRepositoryOpen] = useState(false);
+  const editorExitGuard = useRef<EditorExitGuard | null>(null);
+  const setEditorExitGuard = useCallback((guard: EditorExitGuard | null) => {
+    editorExitGuard.current = guard;
+  }, []);
+  const canLeavePageEditor = useCallback(
+    () => editorExitGuard.current?.() ?? true,
+    [],
+  );
   const spaces = useQuery({
     queryKey: ['spaces'],
     queryFn: () => odocApi.listSpaces(credentials),
@@ -217,7 +265,15 @@ function Workspace({
       odocApi.createSpace(credentials, input),
     onSuccess: (space) => {
       void queryClient.invalidateQueries({ queryKey: ['spaces'] });
+      // A create-space dialog can remain open while someone edits a page. Do
+      // not let its successful mutation switch workspaces underneath them.
+      if (!canLeavePageEditor()) {
+        setNewSpaceOpen(false);
+        return;
+      }
       setSelectedSpace(space);
+      setSelectedPage(null);
+      setEditingPageId(null);
       setNewSpaceOpen(false);
     },
   });
@@ -263,8 +319,26 @@ function Workspace({
   });
 
   const showSpace = (space: Space) => {
+    if (
+      (space.id !== selectedSpace?.id || selectedPage !== null) &&
+      !canLeavePageEditor()
+    )
+      return;
     setSelectedSpace(space);
     setSelectedPage(null);
+    setEditingPageId(null);
+  };
+
+  const showPage = (page: Page) => {
+    if (page.id === selectedPage?.id) return;
+    if (!canLeavePageEditor()) return;
+
+    // Search can select a page from a different space. Keep the surrounding
+    // workspace in sync when that space is already known, while using the
+    // page's own space ID for media uploads below either way.
+    const pageSpace = spaces.data?.find((space) => space.id === page.spaceId);
+    if (pageSpace) setSelectedSpace(pageSpace);
+    setSelectedPage(page);
     setEditingPageId(null);
   };
 
@@ -308,7 +382,12 @@ function Workspace({
               placeholder="Search pages"
             />
           </label>
-          <button className="secondary" onClick={onLogout}>
+          <button
+            className="secondary"
+            onClick={() => {
+              if (canLeavePageEditor()) onLogout();
+            }}
+          >
             Log out
           </button>
         </div>
@@ -317,7 +396,7 @@ function Workspace({
             <strong>Search results</strong>
             {results.isPending && <p>Searching…</p>}
             {results.data?.map((page) => (
-              <button key={page.id} onClick={() => setSelectedPage(page)}>
+              <button key={page.id} onClick={() => showPage(page)}>
                 {page.title}
               </button>
             ))}
@@ -339,9 +418,7 @@ function Workspace({
               <button onClick={() => setNewPageOpen(true)}>New page</button>
             </div>
             {pages.isPending && <p>Loading pages…</p>}
-            {pages.data && (
-              <PageTree pages={pages.data} onSelect={setSelectedPage} />
-            )}
+            {pages.data && <PageTree pages={pages.data} onSelect={showPage} />}
             {pages.data?.length === 0 && (
               <p className="muted">No pages in this space yet.</p>
             )}
@@ -368,11 +445,19 @@ function Workspace({
             key={selectedPage.id}
             initialEditing={editingPageId === selectedPage.id}
             page={selectedPage}
-            spaceId={selectedSpace!.id}
+            spaceId={selectedPage.spaceId}
             credentials={credentials}
             saving={updatePage.isPending}
+            saveError={
+              updatePage.isError
+                ? updatePage.error instanceof Error
+                  ? updatePage.error.message
+                  : 'Could not publish this page. Your edits are still here.'
+                : undefined
+            }
             onSave={(input) => updatePage.mutateAsync(input)}
             onEditingEnd={() => setEditingPageId(null)}
+            onExitGuardChange={setEditorExitGuard}
             onRestore={(page) => {
               setSelectedPage(page);
               void queryClient.invalidateQueries({
@@ -380,22 +465,24 @@ function Workspace({
               });
               void queryClient.invalidateQueries({ queryKey: ['search'] });
             }}
-            onCreateChild={() =>
+            onCreateChild={() => {
+              if (!canLeavePageEditor()) return;
               createPage.mutate({
                 title: 'Untitled child page',
                 content: '',
                 parentId: selectedPage.id,
-              })
-            }
+              });
+            }}
             deleting={deletePage.isPending}
             onDelete={() => {
               if (
-                window.confirm(
+                !window.confirm(
                   `Delete “${selectedPage.title}”? This cannot be undone.`,
                 )
-              ) {
-                deletePage.mutate(selectedPage);
-              }
+              )
+                return;
+              if (!canLeavePageEditor()) return;
+              deletePage.mutate(selectedPage);
             }}
           />
         )}
@@ -667,8 +754,10 @@ function PageEditor({
   spaceId,
   credentials,
   saving,
+  saveError,
   onSave,
   onEditingEnd,
+  onExitGuardChange,
   onRestore,
   onCreateChild,
   onDelete,
@@ -679,8 +768,10 @@ function PageEditor({
   spaceId: string;
   credentials: Credentials;
   saving: boolean;
+  saveError?: string;
   onSave: (input: Pick<Page, 'title' | 'content'>) => Promise<Page>;
   onEditingEnd: () => void;
+  onExitGuardChange: (guard: EditorExitGuard | null) => void;
   onRestore: (page: Page) => void;
   onCreateChild: () => void;
   onDelete: () => void;
@@ -689,7 +780,11 @@ function PageEditor({
   const [title, setTitle] = useState(page.title);
   const [content, setContent] = useState(page.content);
   const [editing, setEditing] = useState(initialEditing);
+  const [uploadsPending, setUploadsPending] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
+  const [exitMessage, setExitMessage] = useState<string>();
+  const editorController = useRef<RichTextEditorController | null>(null);
+  const dirty = title !== page.title || content !== page.content;
   const favorite = useQuery({
     queryKey: ['favorite', page.id],
     queryFn: () => odocApi.favoriteStatus(credentials, page.id),
@@ -717,7 +812,43 @@ function PageEditor({
       });
     },
   });
+  const requestEditorExit = useCallback(() => {
+    if (!editing) return true;
+    if (saving) {
+      setExitMessage(
+        'This page is still saving. Wait for it to finish before leaving.',
+      );
+      return false;
+    }
+    if (
+      uploadsPending > 0 ||
+      editorController.current?.hasActiveUploads() === true
+    ) {
+      setExitMessage(
+        'Media is still uploading. Wait for all uploads to finish before leaving this page.',
+      );
+      return false;
+    }
+    if (dirty && !window.confirm('Discard your unpublished changes?')) {
+      return false;
+    }
+
+    setExitMessage(undefined);
+    editorController.current?.discardUnpublishedAssets();
+    return true;
+  }, [dirty, editing, saving, uploadsPending]);
+
+  useEffect(() => {
+    if (!editing) {
+      onExitGuardChange(null);
+      return undefined;
+    }
+    onExitGuardChange(requestEditorExit);
+    return () => onExitGuardChange(null);
+  }, [editing, onExitGuardChange, requestEditorExit]);
+
   const cancelEditing = () => {
+    if (!requestEditorExit()) return;
     setTitle(page.title);
     setContent(page.content);
     setEditing(false);
@@ -725,25 +856,63 @@ function PageEditor({
   };
 
   const savePage = async () => {
+    if (saving) return;
+    if (uploadsPending > 0 || editorController.current?.hasActiveUploads()) {
+      setExitMessage(
+        'Media is still uploading. Wait for all uploads to finish before publishing.',
+      );
+      return;
+    }
+    const latestContent = editorController.current?.getContent() ?? content;
     try {
-      await onSave({ title, content });
+      await onSave({ title, content: latestContent });
+      editorController.current?.markPublished();
+      setContent(latestContent);
       setEditing(false);
       onEditingEnd();
     } catch {
-      // The mutation's error state is surfaced by the surrounding workspace.
+      // Keep the rich document mounted so the user can retry without data loss.
     }
   };
+
+  useEffect(() => {
+    if (!editing || (!dirty && uploadsPending === 0)) return undefined;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [dirty, editing, uploadsPending]);
+
+  useEffect(() => {
+    if (!editing) return undefined;
+    const saveWithShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void savePage();
+      }
+    };
+    window.addEventListener('keydown', saveWithShortcut);
+    return () => window.removeEventListener('keydown', saveWithShortcut);
+  });
 
   return (
     <section className="document-shell">
       <article className="document-page">
         <div className="page-actions" aria-label="Page actions">
           <span className="page-status">
-            {editing ? 'Editing' : 'Published'}
+            {editing ? (dirty ? 'Unsaved changes' : 'Editing') : 'Published'}
           </span>
           <div className="page-actions-controls">
             {!editing && (
-              <button className="secondary" onClick={() => setEditing(true)}>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setExitMessage(undefined);
+                  setEditing(true);
+                }}
+              >
                 Edit
               </button>
             )}
@@ -791,15 +960,43 @@ function PageEditor({
               value={title}
               onChange={(event) => setTitle(event.target.value)}
             />
-            <RichTextEditor
-              content={content}
-              credentials={credentials}
-              onChange={setContent}
-              onUpload={(file) =>
-                odocApi.uploadImage(credentials, spaceId, file)
-              }
-            />
+            <Suspense fallback={<p className="muted">Loading editor…</p>}>
+              <RichTextEditor
+                content={content}
+                credentials={credentials}
+                onChange={setContent}
+                onControllerChange={(controller) => {
+                  editorController.current = controller;
+                }}
+                onUploadCountChange={(count) => {
+                  setUploadsPending(count);
+                  if (count === 0) {
+                    setExitMessage((message) =>
+                      message?.startsWith('Media is still uploading')
+                        ? undefined
+                        : message,
+                    );
+                  }
+                }}
+                onDeleteMedia={(assetId) =>
+                  odocApi.deleteMedia(credentials, assetId)
+                }
+                onUpload={(file) =>
+                  odocApi.uploadMedia(credentials, spaceId, file)
+                }
+              />
+            </Suspense>
             <div className="editor-footer">
+              {saveError && (
+                <p className="editor-alert" role="alert">
+                  Could not publish this page: {saveError}
+                </p>
+              )}
+              {exitMessage && (
+                <p className="editor-alert" role="alert">
+                  {exitMessage}
+                </p>
+              )}
               <div className="editor-footer-actions">
                 <button
                   className="secondary"
@@ -808,8 +1005,17 @@ function PageEditor({
                 >
                   Cancel
                 </button>
-                <button onClick={() => void savePage()} disabled={saving}>
-                  {saving ? 'Saving…' : 'Publish changes'}
+                <button
+                  onClick={() => void savePage()}
+                  disabled={saving || uploadsPending > 0}
+                >
+                  {saving
+                    ? 'Saving…'
+                    : uploadsPending > 0
+                      ? 'Uploading media…'
+                      : dirty
+                        ? 'Publish changes'
+                        : 'Published'}
                 </button>
               </div>
             </div>
@@ -821,7 +1027,9 @@ function PageEditor({
             <p className="page-meta">
               Last updated {new Date(page.updatedAt).toLocaleString()}
             </p>
-            <RichDocument content={page.content} credentials={credentials} />
+            <Suspense fallback={<p className="muted">Loading document…</p>}>
+              <RichDocument content={page.content} credentials={credentials} />
+            </Suspense>
           </>
         )}
 

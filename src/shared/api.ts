@@ -94,21 +94,33 @@ async function apiFetch<T>(
   return JSON.parse(body) as T;
 }
 
-export async function fetchAuthenticatedImage(
+export async function fetchAuthenticatedMedia(
   credentials: Credentials,
   path: string,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   const { apiBasePath } = await getRuntimeConfig();
-  const response = await fetch(`${apiBasePath}${path}`, {
+  // Upload responses are canonical API paths (`/api/v1/media/{id}`), while
+  // legacy callers may still pass a path relative to the configured API base.
+  // Do not accidentally proxy `/api/v1/api/v1/...` for the canonical form.
+  const requestUrl = path.startsWith(apiBasePath)
+    ? path
+    : `${apiBasePath}${path}`;
+  const response = await fetch(requestUrl, {
     credentials: 'same-origin',
+    signal,
     headers: {
       Authorization: `Basic ${btoa(`${credentials.username}:${credentials.password}`)}`,
     },
   });
   if (!response.ok)
-    throw new Error(`Could not load image (${response.status})`);
+    throw new Error(`Could not load media (${response.status})`);
   return response.blob();
 }
+
+// Repository README rendering still uses this name; page documents use the
+// generic media path above so images and videos share one authenticated flow.
+export const fetchAuthenticatedImage = fetchAuthenticatedMedia;
 
 export const odocApi = {
   listSpaces: (credentials: Credentials) =>
@@ -151,8 +163,16 @@ export const odocApi = {
     }),
   listPageHistory: (credentials: Credentials, pageId: string) =>
     apiFetch<PageVersion[]>(`/pages/${pageId}/history`, credentials),
-  restorePageVersion: (credentials: Credentials, pageId: string, versionId: string) =>
-    apiFetch<Page>(`/pages/${pageId}/history/${versionId}/restore`, credentials, { method: 'POST' }),
+  restorePageVersion: (
+    credentials: Credentials,
+    pageId: string,
+    versionId: string,
+  ) =>
+    apiFetch<Page>(
+      `/pages/${pageId}/history/${versionId}/restore`,
+      credentials,
+      { method: 'POST' },
+    ),
   listComments: (credentials: Credentials, pageId: string) =>
     apiFetch<PageComment[]>(`/pages/${pageId}/comments`, credentials),
   createComment: (
@@ -180,7 +200,7 @@ export const odocApi = {
         body: JSON.stringify({ url }),
       },
     ),
-  uploadImage: (credentials: Credentials, spaceId: string, file: File) => {
+  uploadMedia: (credentials: Credentials, spaceId: string, file: File) => {
     const form = new FormData();
     form.append('file', file);
     return apiFetch<MediaAsset>(`/spaces/${spaceId}/media`, credentials, {
@@ -188,4 +208,6 @@ export const odocApi = {
       body: form,
     });
   },
+  deleteMedia: (credentials: Credentials, assetId: string) =>
+    apiFetch<void>(`/media/${assetId}`, credentials, { method: 'DELETE' }),
 };
