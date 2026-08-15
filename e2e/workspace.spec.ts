@@ -15,7 +15,7 @@ test('creates, edits, and deletes a documentation page', async ({ page }) => {
   const editor = page.getByLabel('Document content');
   await editor.fill('This page was edited in Playwright.');
   await editor.press('Control+a');
-  await page.getByRole('button', { name: 'Heading' }).click();
+  await page.getByLabel('Text style').selectOption('heading-1');
   await page.getByRole('button', { name: 'Publish changes' }).click();
   await expect(
     page.getByRole('heading', { name: 'This page was edited in Playwright.' }),
