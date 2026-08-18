@@ -10,16 +10,19 @@ export function AppRoutes({
   catalog,
   forbidden,
   home,
+  invitation,
   notFound,
 }: {
   catalog: ReactNode;
   forbidden: ReactNode;
   home: ReactNode;
+  invitation: ReactNode;
   notFound: ReactNode;
 }) {
   return (
     <Routes>
       <Route path="/" element={home} />
+      <Route path="/invitations/:routeId" element={invitation} />
       <Route path="/forbidden" element={forbidden} />
       <Route path="/ui-preview" element={catalog} />
       <Route path="*" element={notFound} />

@@ -13,6 +13,18 @@ export type LoginCredentials = {
   password: string;
 };
 
+export type RegistrationCredentials = LoginCredentials & {
+  /** One-time workspace invitation verifier; supplied only by invite-only enrollment. */
+  invitationVerifier?: string;
+};
+
+export type RegistrationPolicy = {
+  /** Whether the current server profile exposes a local-account registration path. */
+  registrationEnabled: boolean;
+  /** Whether a registration request must carry a workspace invitation verifier. */
+  inviteOnly: boolean;
+};
+
 export type PasswordChange = {
   currentPassword: string;
   newPassword: string;
@@ -44,6 +56,7 @@ export type Workspace = {
   id: string;
   name: string;
   role: 'OWNER' | 'MEMBER';
+  revision: number;
 };
 
 export type WorkspaceMember = {
@@ -56,9 +69,24 @@ export type WorkspaceMember = {
 
 export type WorkspaceInvitation = {
   id: string;
+  routeId: string;
   email: string;
   expiresAt: string;
   createdAt: string;
+};
+
+export type WorkspaceGroup = {
+  id: string;
+  name: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+  revision: number;
+  createdAt: string;
+};
+
+export type WorkspaceGroupMember = {
+  userId: string;
+  email: string;
+  joinedAt: string;
 };
 
 export type Page = {
@@ -145,6 +173,10 @@ export type ApiProblem = {
 
 const DEFAULT_API_TIMEOUT_MS = 15_000;
 
+/** Browser-only signals; they carry no session, bearer, refresh, or provider tokens. */
+export const AUTH_SESSION_EXPIRED_EVENT = 'odoc:auth-session-expired';
+export const AUTH_FORBIDDEN_EVENT = 'odoc:auth-forbidden';
+
 /**
  * Stable transport error used by every feature. Screens can make their own
  * product decisions from `status`, while the safe server detail/request ID is
@@ -180,6 +212,7 @@ type ContractComment = ContractSchemas['PageCommentResponse'];
 type ContractRepository = ContractSchemas['RepositoryBindingResponse'];
 type ContractMedia = ContractSchemas['MediaAssetResponse'];
 type ContractSystemInfo = ContractSchemas['SystemInfoResponse'];
+type ContractRegistrationPolicy = ContractSchemas['RegistrationPolicyResponse'];
 type ContractThinSliceCommand =
   ThinSliceComponents['schemas']['ThinSliceCommandResponse'];
 
@@ -335,6 +368,7 @@ function toWorkspace(value: ContractWorkspace): Workspace {
     id: requiredString(value.id, 'workspace.id'),
     name: requiredString(value.name, 'workspace.name'),
     role,
+    revision: requiredNumber(value.revision, 'workspace.revision'),
   };
 }
 
@@ -357,9 +391,34 @@ function toWorkspaceInvitation(
 ): WorkspaceInvitation {
   return {
     id: requiredString(value.id, 'workspaceInvitation.id'),
+    routeId: requiredString(value.routeId, 'workspaceInvitation.routeId'),
     email: requiredString(value.email, 'workspaceInvitation.email'),
     expiresAt: requiredString(value.expiresAt, 'workspaceInvitation.expiresAt'),
     createdAt: requiredString(value.createdAt, 'workspaceInvitation.createdAt'),
+  };
+}
+
+function toWorkspaceGroup(value: unknown): WorkspaceGroup {
+  const item = asRecord(value);
+  const status = requiredString(item?.status, 'workspaceGroup.status');
+  if (status !== 'ACTIVE' && status !== 'SUSPENDED') {
+    throw new Error('API contract violation: workspaceGroup.status is invalid.');
+  }
+  return {
+    id: requiredString(item?.id, 'workspaceGroup.id'),
+    name: requiredString(item?.name, 'workspaceGroup.name'),
+    status,
+    revision: requiredNumber(item?.revision, 'workspaceGroup.revision'),
+    createdAt: requiredString(item?.createdAt, 'workspaceGroup.createdAt'),
+  };
+}
+
+function toWorkspaceGroupMember(value: unknown): WorkspaceGroupMember {
+  const item = asRecord(value);
+  return {
+    userId: requiredString(item?.userId, 'workspaceGroupMember.userId'),
+    email: requiredString(item?.email, 'workspaceGroupMember.email'),
+    joinedAt: requiredString(item?.joinedAt, 'workspaceGroupMember.joinedAt'),
   };
 }
 
@@ -482,7 +541,18 @@ async function apiFetch<T>(
     request.cleanup();
   }
   if (!response.ok) {
-    throw await toApiRequestError(response);
+    const error = await toApiRequestError(response);
+    // Login/session/recovery endpoints intentionally surface their own 401/403
+    // responses. A protected resource failing instead means the cookie session
+    // has expired or the server has denied the current capability.
+    if (typeof window !== 'undefined' && !path.startsWith('/auth/')) {
+      if (error.problem.status === 401) {
+        window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
+      } else if (error.problem.status === 403) {
+        window.dispatchEvent(new Event(AUTH_FORBIDDEN_EVENT));
+      }
+    }
+    throw error;
   }
   if (response.status === 204) return undefined as T;
   const body = await response.text();
@@ -550,12 +620,32 @@ function toAuthSession(value: unknown): AuthSession {
   };
 }
 
+function toRegistrationPolicy(
+  value: ContractRegistrationPolicy,
+): RegistrationPolicy {
+  return {
+    registrationEnabled: requiredBoolean(
+      value.registrationEnabled,
+      'registrationPolicy.registrationEnabled',
+    ),
+    inviteOnly: requiredBoolean(
+      value.inviteOnly,
+      'registrationPolicy.inviteOnly',
+    ),
+  };
+}
+
 export const odocApi = {
-  register: (input: LoginCredentials) =>
+  register: (input: RegistrationCredentials) =>
     apiFetch<unknown>('/auth/register', undefined, {
       method: 'POST',
       body: JSON.stringify(input),
     }).then(toAuthSession),
+  registrationPolicy: () =>
+    apiFetch<ContractRegistrationPolicy>(
+      '/auth/registration-policy',
+      undefined,
+    ).then(toRegistrationPolicy),
   login: (input: LoginCredentials) =>
     apiFetch<unknown>('/auth/login', undefined, {
       method: 'POST',
@@ -591,6 +681,11 @@ export const odocApi = {
     apiFetch<void>('/auth/email-verification/resend', credentials, {
       method: 'POST',
     }),
+  refreshAuthentication: (credentials: Credentials, password: string) =>
+    apiFetch<void>('/auth/fresh-authentication', credentials, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
   systemInfo: (credentials: Credentials, signal?: AbortSignal) =>
     apiFetch<ContractSystemInfo>('/system/info', credentials, { signal }).then(
       toSystemInfo,
@@ -612,6 +707,22 @@ export const odocApi = {
     apiFetch<ContractWorkspace[]>('/workspaces', credentials, { signal }).then(
       (items) => items.map(toWorkspace),
     ),
+  createWorkspace: (credentials: Credentials, name: string) =>
+    apiFetch<ContractWorkspace>('/workspaces', credentials, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }).then(toWorkspace),
+  updateWorkspace: (
+    credentials: Credentials,
+    workspaceId: string,
+    revision: number,
+    name: string,
+  ) =>
+    apiFetch<ContractWorkspace>(`/workspaces/${workspaceId}`, credentials, {
+      method: 'PATCH',
+      headers: { 'If-Match': `"${revision}"` },
+      body: JSON.stringify({ name }),
+    }).then(toWorkspace),
   listWorkspaceMembers: (
     credentials: Credentials,
     workspaceId: string,
@@ -644,6 +755,26 @@ export const odocApi = {
         method: 'DELETE',
       },
     ),
+  updateWorkspaceMemberRole: (
+    credentials: Credentials,
+    workspaceId: string,
+    memberId: string,
+    role: 'MEMBER',
+  ) =>
+    apiFetch<ContractWorkspaceMember>(
+      `/workspaces/${workspaceId}/members/${memberId}`,
+      credentials,
+      { method: 'PATCH', body: JSON.stringify({ role }) },
+    ).then(toWorkspaceMember),
+  transferWorkspaceOwnership: (
+    credentials: Credentials,
+    workspaceId: string,
+    successorUserId: string,
+  ) =>
+    apiFetch<void>(`/workspaces/${workspaceId}/ownership-transfer`, credentials, {
+      method: 'POST',
+      body: JSON.stringify({ successorUserId }),
+    }),
   listWorkspaceInvitations: (
     credentials: Credentials,
     workspaceId: string,
@@ -674,8 +805,57 @@ export const odocApi = {
       credentials,
       { method: 'DELETE' },
     ),
-  acceptWorkspaceInvitation: (credentials: Credentials, verifier: string) =>
-    apiFetch<void>('/workspaces/invitations/accept', credentials, {
+  listWorkspaceGroups: (
+    credentials: Credentials,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ) =>
+    apiFetch<unknown[]>(`/workspaces/${workspaceId}/groups`, credentials, {
+      signal,
+    }).then((items) => items.map(toWorkspaceGroup)),
+  createWorkspaceGroup: (
+    credentials: Credentials,
+    workspaceId: string,
+    name: string,
+  ) =>
+    apiFetch<unknown>(`/workspaces/${workspaceId}/groups`, credentials, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }).then(toWorkspaceGroup),
+  listWorkspaceGroupMembers: (
+    credentials: Credentials,
+    workspaceId: string,
+    groupId: string,
+  ) =>
+    apiFetch<unknown[]>(
+      `/workspaces/${workspaceId}/groups/${groupId}/members`,
+      credentials,
+    ).then((items) => items.map(toWorkspaceGroupMember)),
+  addWorkspaceGroupMember: (
+    credentials: Credentials,
+    workspaceId: string,
+    groupId: string,
+    userId: string,
+  ) =>
+    apiFetch<void>(`/workspaces/${workspaceId}/groups/${groupId}/members`, credentials, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    }),
+  removeWorkspaceGroupMember: (
+    credentials: Credentials,
+    workspaceId: string,
+    groupId: string,
+    userId: string,
+  ) =>
+    apiFetch<void>(`/workspaces/${workspaceId}/groups/${groupId}/members/${userId}`, credentials, {
+      method: 'DELETE',
+    }),
+  acceptWorkspaceInvitation: (credentials: Credentials) =>
+    apiFetch<void>('/invitations/accept', credentials, {
+      method: 'POST',
+    }),
+  exchangeWorkspaceInvitation: (routeId: string, verifier: string) =>
+    apiFetch<void>(`/invitations/${routeId}/exchange`, undefined, {
       method: 'POST',
       body: JSON.stringify({ verifier }),
     }),

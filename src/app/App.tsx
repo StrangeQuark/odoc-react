@@ -14,15 +14,18 @@ import {
   useMutation,
   useQuery,
 } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
+  AUTH_FORBIDDEN_EVENT,
+  AUTH_SESSION_EXPIRED_EVENT,
   odocApi,
   fetchAuthenticatedImage,
   readCsrfToken,
   type AuthSession,
   type Credentials,
-  type LoginCredentials,
   type PasswordChange,
+  type RegistrationCredentials,
+  type RegistrationPolicy,
   type Page,
   type PageVersion,
   type RepositoryBinding,
@@ -30,6 +33,8 @@ import {
   type Workspace as WorkspaceInfo,
   type WorkspaceInvitation,
   type WorkspaceMember,
+  type WorkspaceGroup,
+  type WorkspaceGroupMember,
 } from '../shared/api';
 import { Button } from '../shared/ui/Button';
 import { Dialog } from '../shared/ui/Dialog';
@@ -39,6 +44,7 @@ import { FormField } from '../shared/ui/FormField';
 import { type RichTextEditorController } from './RichDocument';
 import { getRuntimeConfig } from '../shared/config/runtimeConfig';
 import { AppErrorBoundary } from './AppErrorBoundary';
+import { safeLocalReturnPath } from './authNavigation';
 import { AppRoutes } from '../routes/AppRoutes';
 
 // Editing is a substantial dependency (ProseMirror/Tiptap and rich-media node
@@ -64,13 +70,17 @@ const queryClient = new QueryClient({
  */
 type EditorExitGuard = () => boolean;
 
+const AUTH_LOGOUT_STORAGE_KEY = 'odoc.auth.logout';
+
 function LoginPage({
   onLogin,
   onRequestPasswordRecovery,
   onCompletePasswordRecovery,
+  registrationPolicy,
+  authNotice,
 }: {
   onLogin: (
-    credentials: LoginCredentials,
+    credentials: RegistrationCredentials,
     createAccount: boolean,
   ) => Promise<void>;
   onRequestPasswordRecovery: (email: string) => Promise<void>;
@@ -78,10 +88,13 @@ function LoginPage({
     verifier: string;
     newPassword: string;
   }) => Promise<void>;
+  registrationPolicy: RegistrationPolicy | null;
+  authNotice: string | null;
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [createAccount, setCreateAccount] = useState(false);
+  const [invitationVerifier, setInvitationVerifier] = useState('');
   const [recoveryStep, setRecoveryStep] = useState<
     'request' | 'complete' | null
   >(null);
@@ -97,7 +110,16 @@ function LoginPage({
     setError(null);
     setSubmitting(true);
     try {
-      await onLogin({ email, password }, createAccount);
+      await onLogin(
+        {
+          email,
+          password,
+          ...(createAccount && registrationPolicy?.inviteOnly
+            ? { invitationVerifier }
+            : {}),
+        },
+        createAccount,
+      );
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -169,9 +191,12 @@ function LoginPage({
         <p className="eyebrow">Documentation workspace</p>
         <h1 id="welcome-heading">Build a home for what your team knows.</h1>
         <p className="lede">
-          Sign in with your Odoc email and password. This local environment also
-          allows you to create a development account; production will use
-          invite-only registration, with optional OIDC and SSO later.
+          Sign in with your Odoc email and password.{' '}
+          {registrationPolicy?.inviteOnly
+            ? 'This deployment is invite-only: use the one-time workspace invitation code you received when creating an account.'
+            : registrationPolicy?.registrationEnabled
+              ? 'You can create an account with a verified email address.'
+              : 'New local-account registration is disabled by this deployment.'}
         </p>
         {recoveryStep === 'request' ? (
           <form onSubmit={requestRecovery} className="stack-form">
@@ -279,7 +304,25 @@ function LoginPage({
                 required
               />
             </FormField>
+            {createAccount && registrationPolicy?.inviteOnly && (
+              <FormField
+                id="workspace-invitation-code"
+                label="Workspace invitation code"
+              >
+                <input
+                  id="workspace-invitation-code"
+                  value={invitationVerifier}
+                  onChange={(event) =>
+                    setInvitationVerifier(event.target.value)
+                  }
+                  autoComplete="one-time-code"
+                  maxLength={256}
+                  required
+                />
+              </FormField>
+            )}
             {error && <p role="alert">{error}</p>}
+            {authNotice && <p role="status">{authNotice}</p>}
             <Button type="submit" disabled={submitting}>
               {submitting
                 ? 'Working…'
@@ -287,18 +330,23 @@ function LoginPage({
                   ? 'Create account'
                   : 'Sign in'}
             </Button>
-            <button
-              className="text-button"
-              type="button"
-              onClick={() => {
-                setCreateAccount((current) => !current);
-                setError(null);
-              }}
-            >
-              {createAccount
-                ? 'I already have an account'
-                : 'Create a local development account'}
-            </button>
+            {registrationPolicy?.registrationEnabled && (
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => {
+                  setCreateAccount((current) => !current);
+                  setError(null);
+                  setInvitationVerifier('');
+                }}
+              >
+                {createAccount
+                  ? 'I already have an account'
+                  : registrationPolicy.inviteOnly
+                    ? 'Create an account with an invitation code'
+                    : 'Create an account'}
+              </button>
+            )}
             {!createAccount && (
               <button
                 className="text-button"
@@ -314,6 +362,91 @@ function LoginPage({
             )}
           </form>
         )}
+      </section>
+    </main>
+  );
+}
+
+/**
+ * Consumes an invitation verifier from the fragment exactly once. Fragments are
+ * not transmitted to the server; after the bounded POST exchange we remove it
+ * from the visible/current URL before any sign-in or acceptance flow continues.
+ */
+function InvitationAcceptancePage({
+  credentials,
+  authState,
+}: {
+  credentials: Credentials | null;
+  authState: 'checking' | 'anonymous' | 'ready';
+}) {
+  const { routeId } = useParams();
+  const navigate = useNavigate();
+  const started = useRef(false);
+  const [status, setStatus] = useState<'working' | 'signin' | 'accepted' | 'error'>('working');
+  const [message, setMessage] = useState('Checking this invitation…');
+
+  useEffect(() => {
+    if (!routeId || started.current) return;
+    started.current = true;
+    const verifier = new URLSearchParams(window.location.hash.slice(1)).get('v');
+    // A fragment has already entered the initial browser history entry. This
+    // removes it from the visible/current entry before any later navigation,
+    // referrer, telemetry, or copied link can replay it.
+    window.history.replaceState(null, '', `/invitations/${routeId}`);
+    if (!verifier) {
+      queueMicrotask(() => {
+        setStatus('signin');
+        setMessage('Sign in with the invited email address to continue.');
+      });
+      return;
+    }
+    void odocApi.exchangeWorkspaceInvitation(routeId, verifier).then(
+      () => {
+        setStatus('signin');
+        setMessage('Invitation confirmed. Sign in with the invited email address to join the workspace.');
+      },
+      (reason: unknown) => {
+        setStatus('error');
+        setMessage(reason instanceof Error ? reason.message : 'This invitation is invalid or expired.');
+      },
+    );
+  }, [routeId]);
+
+  useEffect(() => {
+    if (status !== 'signin' || authState !== 'ready' || !credentials) return;
+    queueMicrotask(() => {
+      setStatus('working');
+      setMessage('Joining workspace…');
+    });
+    void odocApi.acceptWorkspaceInvitation(credentials).then(
+      () => {
+        setStatus('accepted');
+        setMessage('You joined the workspace.');
+        void queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+        void queryClient.invalidateQueries({ queryKey: ['spaces'] });
+        navigate('/', { replace: true });
+      },
+      (reason: unknown) => {
+        setStatus('error');
+        setMessage(reason instanceof Error ? reason.message : 'Could not accept this invitation.');
+      },
+    );
+  }, [authState, credentials, navigate, status]);
+
+  const returnTo = `/invitations/${routeId ?? ''}`;
+  return (
+    <main id="main-content" className="login-shell">
+      <DocumentMetadata title="Join workspace" />
+      <section className="login-card" aria-live="polite">
+        <p className="eyebrow">Workspace invitation</p>
+        <h1>Join a workspace</h1>
+        <p role={status === 'error' ? 'alert' : 'status'}>{message}</p>
+        {status === 'signin' && authState === 'anonymous' && (
+          <Link className="button-link" to={`/?returnTo=${encodeURIComponent(returnTo)}`}>
+            Sign in to continue
+          </Link>
+        )}
+        {status === 'error' && <Link to="/">Return to sign in</Link>}
       </section>
     </main>
   );
@@ -456,6 +589,7 @@ function Workspace({
   onPasswordChange: (input: PasswordChange) => Promise<void>;
 }) {
   const [selectedSpace, setSelectedSpace] = useState<Space | null>(null);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<Page | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -463,7 +597,9 @@ function Workspace({
   const [newPageOpen, setNewPageOpen] = useState(false);
   const [newRepositoryOpen, setNewRepositoryOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
-  const [joinInvitationOpen, setJoinInvitationOpen] = useState(false);
+  const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
+  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [verificationOpen, setVerificationOpen] = useState(false);
   const editorExitGuard = useRef<EditorExitGuard | null>(null);
@@ -483,7 +619,16 @@ function Workspace({
     queryFn: ({ signal }) => odocApi.listWorkspaces(credentials, signal),
   });
   const selectedWorkspace = workspaces.data?.find(
-    (workspace) => workspace.id === selectedSpace?.workspaceId,
+    (workspace) => workspace.id === (selectedWorkspaceId ?? selectedSpace?.workspaceId),
+  );
+  useEffect(() => {
+    const firstWorkspace = workspaces.data?.[0];
+    if (!selectedWorkspaceId && firstWorkspace) {
+      queueMicrotask(() => setSelectedWorkspaceId(firstWorkspace.id));
+    }
+  }, [selectedWorkspaceId, workspaces.data]);
+  const visibleSpaces = spaces.data?.filter(
+    (space) => space.workspaceId === selectedWorkspace?.id,
   );
   const members = useQuery({
     queryKey: ['workspace-members', selectedWorkspace?.id],
@@ -500,6 +645,26 @@ function Workspace({
         signal,
       ),
     enabled: membersOpen && selectedWorkspace?.role === 'OWNER',
+  });
+  const groups = useQuery({
+    queryKey: ['workspace-groups', selectedWorkspace?.id],
+    queryFn: ({ signal }) =>
+      odocApi.listWorkspaceGroups(credentials, selectedWorkspace!.id, signal),
+    enabled: membersOpen && selectedWorkspace?.role === 'OWNER',
+  });
+  const selectedGroup = groups.data?.find((group) => group.id === selectedGroupId) ?? null;
+  useEffect(() => {
+    const firstGroup = groups.data?.[0];
+    if (!selectedGroupId && firstGroup) {
+      queueMicrotask(() => setSelectedGroupId(firstGroup.id));
+    }
+  }, [groups.data, selectedGroupId]);
+  const groupMembers = useQuery({
+    queryKey: ['workspace-group-members', selectedWorkspace?.id, selectedGroup?.id],
+    queryFn: () => odocApi.listWorkspaceGroupMembers(
+      credentials, selectedWorkspace!.id, selectedGroup!.id,
+    ),
+    enabled: membersOpen && selectedWorkspace?.role === 'OWNER' && selectedGroup !== null,
   });
   const systemInfo = useQuery({
     queryKey: ['system-info'],
@@ -536,6 +701,29 @@ function Workspace({
       setSelectedPage(null);
       setEditingPageId(null);
       setNewSpaceOpen(false);
+    },
+  });
+  const createWorkspace = useMutation({
+    mutationFn: (name: string) => odocApi.createWorkspace(credentials, name),
+    onSuccess: (workspace) => {
+      setSelectedWorkspaceId(workspace.id);
+      setSelectedSpace(null);
+      setSelectedPage(null);
+      setNewWorkspaceOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+    },
+  });
+  const updateWorkspace = useMutation({
+    mutationFn: (input: { name: string }) =>
+      odocApi.updateWorkspace(
+        credentials,
+        selectedWorkspace!.id,
+        selectedWorkspace!.revision,
+        input.name,
+      ),
+    onSuccess: () => {
+      setWorkspaceSettingsOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['workspaces'] });
     },
   });
   const createPage = useMutation({
@@ -604,15 +792,6 @@ function Workspace({
       });
     },
   });
-  const acceptWorkspaceInvitation = useMutation({
-    mutationFn: (verifier: string) =>
-      odocApi.acceptWorkspaceInvitation(credentials, verifier),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['workspaces'] });
-      void queryClient.invalidateQueries({ queryKey: ['spaces'] });
-      setJoinInvitationOpen(false);
-    },
-  });
   const removeWorkspaceMember = useMutation({
     mutationFn: (member: WorkspaceMember) =>
       odocApi.removeWorkspaceMember(
@@ -626,6 +805,44 @@ function Workspace({
       });
     },
   });
+  const transferWorkspaceOwnership = useMutation({
+    mutationFn: (member: WorkspaceMember) =>
+      odocApi.transferWorkspaceOwnership(
+        credentials,
+        selectedWorkspace!.id,
+        member.userId,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-members', selectedWorkspace?.id] });
+    },
+  });
+  const createWorkspaceGroup = useMutation({
+    mutationFn: (name: string) =>
+      odocApi.createWorkspaceGroup(credentials, selectedWorkspace!.id, name),
+    onSuccess: (group) => {
+      setSelectedGroupId(group.id);
+      void queryClient.invalidateQueries({ queryKey: ['workspace-groups', selectedWorkspace?.id] });
+    },
+  });
+  const addWorkspaceGroupMember = useMutation({
+    mutationFn: (userId: string) => odocApi.addWorkspaceGroupMember(
+      credentials, selectedWorkspace!.id, selectedGroup!.id, userId,
+    ),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: ['workspace-group-members', selectedWorkspace?.id, selectedGroup?.id],
+      }),
+  });
+  const removeWorkspaceGroupMember = useMutation({
+    mutationFn: (userId: string) => odocApi.removeWorkspaceGroupMember(
+      credentials, selectedWorkspace!.id, selectedGroup!.id, userId,
+    ),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: ['workspace-group-members', selectedWorkspace?.id, selectedGroup?.id],
+      }),
+  });
 
   const showSpace = (space: Space) => {
     if (
@@ -634,6 +851,7 @@ function Workspace({
     )
       return;
     setSelectedSpace(space);
+    setSelectedWorkspaceId(space.workspaceId);
     setSelectedPage(null);
     setEditingPageId(null);
   };
@@ -668,7 +886,7 @@ function Workspace({
         </div>
         {spaces.isPending && <p className="muted">Loading spaces…</p>}
         {spaces.isError && <p role="alert">Could not load spaces.</p>}
-        {spaces.data?.map((space) => (
+        {visibleSpaces?.map((space) => (
           <button
             key={space.id}
             className={
@@ -680,12 +898,35 @@ function Workspace({
             {space.name}
           </button>
         ))}
-        {spaces.data?.length === 0 && (
+        {selectedWorkspace && visibleSpaces?.length === 0 && (
           <p className="muted">Create your first space to begin.</p>
         )}
       </aside>
       <section className="workspace-content">
         <div className="toolbar">
+          <label className="workspace-switcher">
+            Workspace
+            <select
+              value={selectedWorkspace?.id ?? ''}
+              onChange={(event) => {
+                if (!canLeavePageEditor()) return;
+                const workspaceId = event.target.value;
+                setSelectedWorkspaceId(workspaceId);
+                setSelectedSpace(
+                  spaces.data?.find((space) => space.workspaceId === workspaceId) ?? null,
+                );
+                setSelectedPage(null);
+                setEditingPageId(null);
+              }}
+            >
+              {workspaces.data?.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+              ))}
+            </select>
+          </label>
+          <button className="secondary" onClick={() => setNewWorkspaceOpen(true)}>
+            New workspace
+          </button>
           <label className="search-box">
             Search
             <input
@@ -711,18 +952,13 @@ function Workspace({
             </div>
           )}
           {selectedWorkspace?.role === 'OWNER' && (
-            <button className="secondary" onClick={() => setMembersOpen(true)}>
-              Members
-            </button>
+            <>
+              <button className="secondary" onClick={() => setMembersOpen(true)}>People</button>
+              <button className="secondary" onClick={() => setWorkspaceSettingsOpen(true)}>Workspace settings</button>
+            </>
           )}
           <button className="secondary" onClick={() => setAccountOpen(true)}>
             Account
-          </button>
-          <button
-            className="secondary"
-            onClick={() => setJoinInvitationOpen(true)}
-          >
-            Join workspace
           </button>
           <button
             className="secondary"
@@ -858,6 +1094,11 @@ function Workspace({
           workspace={selectedWorkspace}
           members={members.data ?? []}
           invitations={invitations.data ?? []}
+          groups={groups.data ?? []}
+          selectedGroup={selectedGroup}
+          groupMembers={groupMembers.data ?? []}
+          groupMembersLoading={groupMembers.isPending}
+          groupMembersError={groupMembers.error instanceof Error ? groupMembers.error.message : undefined}
           loading={members.isPending}
           loadingError={
             members.isError
@@ -912,20 +1153,37 @@ function Workspace({
           onRevokeInvitation={(invitation) =>
             revokeWorkspaceInvitation.mutate(invitation)
           }
+          onTransferOwnership={(member) => transferWorkspaceOwnership.mutate(member)}
+          transferringUserId={transferWorkspaceOwnership.isPending ? transferWorkspaceOwnership.variables?.userId : undefined}
+          onCreateGroup={(name) => createWorkspaceGroup.mutate(name)}
+          creatingGroup={createWorkspaceGroup.isPending}
+          groupError={createWorkspaceGroup.error instanceof Error ? createWorkspaceGroup.error.message : undefined}
+          onSelectGroup={(group) => setSelectedGroupId(group.id)}
+          onAddGroupMember={(userId) => addWorkspaceGroupMember.mutate(userId)}
+          addingGroupMember={addWorkspaceGroupMember.isPending}
+          addGroupMemberError={addWorkspaceGroupMember.error instanceof Error ? addWorkspaceGroupMember.error.message : undefined}
+          onRemoveGroupMember={(userId) => removeWorkspaceGroupMember.mutate(userId)}
+          removingGroupMemberId={removeWorkspaceGroupMember.isPending ? removeWorkspaceGroupMember.variables : undefined}
+          removeGroupMemberError={removeWorkspaceGroupMember.error instanceof Error ? removeWorkspaceGroupMember.error.message : undefined}
         />
       )}
-      {joinInvitationOpen && (
-        <JoinWorkspaceDialog
-          busy={acceptWorkspaceInvitation.isPending}
-          error={
-            acceptWorkspaceInvitation.isError
-              ? acceptWorkspaceInvitation.error instanceof Error
-                ? acceptWorkspaceInvitation.error.message
-                : 'Could not accept that invitation.'
-              : undefined
-          }
-          onClose={() => setJoinInvitationOpen(false)}
-          onSubmit={(verifier) => acceptWorkspaceInvitation.mutate(verifier)}
+      {newWorkspaceOpen && (
+        <WorkspaceDialog
+          title="Create workspace"
+          busy={createWorkspace.isPending}
+          error={createWorkspace.error instanceof Error ? createWorkspace.error.message : undefined}
+          onClose={() => setNewWorkspaceOpen(false)}
+          onSubmit={(name) => createWorkspace.mutate(name)}
+        />
+      )}
+      {workspaceSettingsOpen && selectedWorkspace && (
+        <WorkspaceDialog
+          title="Rename workspace"
+          initialName={selectedWorkspace.name}
+          busy={updateWorkspace.isPending}
+          error={updateWorkspace.error instanceof Error ? updateWorkspace.error.message : undefined}
+          onClose={() => setWorkspaceSettingsOpen(false)}
+          onSubmit={(name) => updateWorkspace.mutate({ name })}
         />
       )}
       {accountOpen && (
@@ -1164,6 +1422,52 @@ function EmailVerificationDialog({
   );
 }
 
+function EmailVerificationScreen({
+  email,
+  onVerify,
+  onResend,
+  onLogout,
+}: {
+  email: string;
+  onVerify: (verifier: string) => Promise<void>;
+  onResend: () => Promise<void>;
+  onLogout: () => void;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  return (
+    <main id="main-content" className="login-shell">
+      <DocumentMetadata title="Verify your email" />
+      <section className="login-card" aria-labelledby="verify-email-heading">
+        <p className="eyebrow">One more step</p>
+        <h1 id="verify-email-heading">Verify your email</h1>
+        <p>
+          We sent a one-time code to <strong>{email}</strong>. Verify it before
+          Odoc loads any workspace or document data.
+        </p>
+        <div className="dialog-actions">
+          <button onClick={() => setDialogOpen(true)}>
+            Enter verification code
+          </button>
+          <button className="secondary" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
+      </section>
+      {dialogOpen && (
+        <EmailVerificationDialog
+          email={email}
+          onClose={() => setDialogOpen(false)}
+          onVerify={async (verifier) => {
+            await onVerify(verifier);
+            setDialogOpen(false);
+          }}
+          onResend={onResend}
+        />
+      )}
+    </main>
+  );
+}
+
 function PageTree({
   pages,
   onSelect,
@@ -1200,6 +1504,11 @@ function WorkspaceMembersDialog({
   workspace,
   members,
   invitations,
+  groups,
+  selectedGroup,
+  groupMembers,
+  groupMembersLoading,
+  groupMembersError,
   loading,
   loadingError,
   invitationsLoading,
@@ -1214,10 +1523,27 @@ function WorkspaceMembersDialog({
   onInvite,
   onRemove,
   onRevokeInvitation,
+  onTransferOwnership,
+  transferringUserId,
+  onCreateGroup,
+  creatingGroup,
+  groupError,
+  onSelectGroup,
+  onAddGroupMember,
+  addingGroupMember,
+  addGroupMemberError,
+  onRemoveGroupMember,
+  removingGroupMemberId,
+  removeGroupMemberError,
 }: {
   workspace: WorkspaceInfo;
   members: WorkspaceMember[];
   invitations: WorkspaceInvitation[];
+  groups: WorkspaceGroup[];
+  selectedGroup: WorkspaceGroup | null;
+  groupMembers: WorkspaceGroupMember[];
+  groupMembersLoading: boolean;
+  groupMembersError?: string;
   loading: boolean;
   loadingError?: string;
   invitationsLoading: boolean;
@@ -1232,8 +1558,23 @@ function WorkspaceMembersDialog({
   onInvite: (email: string) => void;
   onRemove: (member: WorkspaceMember) => void;
   onRevokeInvitation: (invitation: WorkspaceInvitation) => void;
+  onTransferOwnership: (member: WorkspaceMember) => void;
+  transferringUserId?: string;
+  onCreateGroup: (name: string) => void;
+  creatingGroup: boolean;
+  groupError?: string;
+  onSelectGroup: (group: WorkspaceGroup) => void;
+  onAddGroupMember: (userId: string) => void;
+  addingGroupMember: boolean;
+  addGroupMemberError?: string;
+  onRemoveGroupMember: (userId: string) => void;
+  removingGroupMemberId?: string;
+  removeGroupMemberError?: string;
 }) {
   const [email, setEmail] = useState('');
+  const [groupName, setGroupName] = useState('');
+  const [groupMemberUserId, setGroupMemberUserId] = useState('');
+  const groupMemberIds = new Set(groupMembers.map((member) => member.userId));
   return (
     <Dialog
       isOpen
@@ -1289,22 +1630,30 @@ function WorkspaceMembersDialog({
                   <small>{member.role === 'OWNER' ? 'Owner' : 'Member'}</small>
                 </span>
                 {member.role === 'MEMBER' && (
-                  <button
-                    type="button"
-                    className="secondary danger"
-                    disabled={removingMemberId === member.id}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Remove ${member.email} from ${workspace.name}?`,
-                        )
-                      ) {
-                        onRemove(member);
-                      }
-                    }}
-                  >
-                    {removingMemberId === member.id ? 'Removing…' : 'Remove'}
-                  </button>
+                  <span className="member-actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={transferringUserId === member.userId}
+                      onClick={() => {
+                        if (window.confirm(`Transfer ownership of ${workspace.name} to ${member.email}? You will become a member.`)) {
+                          onTransferOwnership(member);
+                        }
+                      }}
+                    >
+                      {transferringUserId === member.userId ? 'Transferring…' : 'Make owner'}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary danger"
+                      disabled={removingMemberId === member.id}
+                      onClick={() => {
+                        if (window.confirm(`Remove ${member.email} from ${workspace.name}?`)) onRemove(member);
+                      }}
+                    >
+                      {removingMemberId === member.id ? 'Removing…' : 'Remove'}
+                    </button>
+                  </span>
                 )}
               </li>
             ))}
@@ -1350,56 +1699,86 @@ function WorkspaceMembersDialog({
         )}
         {revokeInvitationError && <p role="alert">{revokeInvitationError}</p>}
       </section>
+      <section className="workspace-members" aria-labelledby="workspace-groups-heading">
+        <h3 id="workspace-groups-heading">Groups</h3>
+        <form
+          className="inline-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onCreateGroup(groupName);
+            setGroupName('');
+          }}
+        >
+          <label>
+            New group name
+            <input value={groupName} onChange={(event) => setGroupName(event.target.value)} required />
+          </label>
+          <button disabled={creatingGroup}>{creatingGroup ? 'Creating…' : 'Create group'}</button>
+        </form>
+        {groupError && <p role="alert">{groupError}</p>}
+        {groups.length === 0 ? <p className="muted">No groups yet.</p> : (
+          <ul>{groups.map((group) => <li key={group.id}><span><strong>{group.name}</strong><small>{group.status.toLowerCase()}</small></span><button type="button" className="secondary" onClick={() => onSelectGroup(group)}>{selectedGroup?.id === group.id ? 'Selected' : 'Manage'}</button></li>)}</ul>
+        )}
+        {selectedGroup && (
+          <section className="group-members" aria-labelledby="selected-group-heading">
+            <h4 id="selected-group-heading">{selectedGroup.name} members</h4>
+            <form className="inline-form" onSubmit={(event) => {
+              event.preventDefault();
+              onAddGroupMember(groupMemberUserId);
+              setGroupMemberUserId('');
+            }}>
+              <label>
+                Add workspace member
+                <select value={groupMemberUserId} onChange={(event) => setGroupMemberUserId(event.target.value)} required>
+                  <option value="">Choose a member</option>
+                  {members.filter((member) => !groupMemberIds.has(member.userId)).map((member) => (
+                    <option key={member.userId} value={member.userId}>{member.email}</option>
+                  ))}
+                </select>
+              </label>
+              <button disabled={addingGroupMember || groupMemberUserId === ''}>{addingGroupMember ? 'Adding…' : 'Add to group'}</button>
+            </form>
+            {addGroupMemberError && <p role="alert">{addGroupMemberError}</p>}
+            {groupMembersLoading && <p>Loading group members…</p>}
+            {groupMembersError && <p role="alert">{groupMembersError}</p>}
+            {!groupMembersLoading && !groupMembersError && groupMembers.length === 0 && <p className="muted">No group members yet.</p>}
+            {!groupMembersLoading && !groupMembersError && groupMembers.length > 0 && (
+              <ul>{groupMembers.map((member) => <li key={member.userId}><span><strong>{member.email}</strong></span><button type="button" className="secondary danger" disabled={removingGroupMemberId === member.userId} onClick={() => onRemoveGroupMember(member.userId)}>{removingGroupMemberId === member.userId ? 'Removing…' : 'Remove'}</button></li>)}</ul>
+            )}
+            {removeGroupMemberError && <p role="alert">{removeGroupMemberError}</p>}
+          </section>
+        )}
+      </section>
     </Dialog>
   );
 }
 
-function JoinWorkspaceDialog({
+function WorkspaceDialog({
+  title,
+  initialName = '',
   busy,
   error,
   onClose,
   onSubmit,
 }: {
+  title: string;
+  initialName?: string;
   busy: boolean;
   error?: string;
   onClose: () => void;
-  onSubmit: (verifier: string) => void;
+  onSubmit: (name: string) => void;
 }) {
-  const [verifier, setVerifier] = useState('');
+  const [name, setName] = useState(initialName);
   return (
-    <Dialog
-      isOpen
-      onClose={onClose}
-      className="dialog"
-      title="Join a workspace"
-    >
-      <form
-        className="stack-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSubmit(verifier);
-        }}
-      >
-        <FormField id="workspace-invitation-code" label="Invitation code">
-          <input
-            id="workspace-invitation-code"
-            value={verifier}
-            onChange={(event) => setVerifier(event.target.value)}
-            autoComplete="one-time-code"
-            required
-          />
+    <Dialog isOpen onClose={onClose} className="dialog" title={title}>
+      <form className="stack-form" onSubmit={(event) => { event.preventDefault(); onSubmit(name); }}>
+        <FormField id="workspace-name" label="Workspace name">
+          <input id="workspace-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={160} required />
         </FormField>
-        <p className="muted">
-          Sign in using the email address that received the invitation.
-        </p>
         {error && <p role="alert">{error}</p>}
         <div className="dialog-actions">
-          <button type="button" className="secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button disabled={busy}>
-            {busy ? 'Joining…' : 'Join workspace'}
-          </button>
+          <button type="button" className="secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button disabled={busy}>{busy ? 'Saving…' : title}</button>
         </div>
       </form>
     </Dialog>
@@ -2064,11 +2443,17 @@ function RuntimeConfigGate({ children }: { children: ReactNode }) {
 }
 
 export function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
+  const [registrationPolicy, setRegistrationPolicy] =
+    useState<RegistrationPolicy | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authState, setAuthState] = useState<
     'checking' | 'anonymous' | 'ready'
   >('checking');
+  const authChannel = useRef<BroadcastChannel | null>(null);
 
   const establishSession = useCallback((nextSession: AuthSession) => {
     const csrfToken = readCsrfToken();
@@ -2082,8 +2467,87 @@ export function App() {
     setAuthState('ready');
   }, []);
 
+  const clearAuthentication = useCallback((notice?: string) => {
+    queryClient.clear();
+    setCredentials(null);
+    setSession(null);
+    setAuthState('anonymous');
+    setAuthNotice(notice ?? null);
+  }, []);
+
+  const navigateToSignIn = useCallback(() => {
+    const currentPath = safeLocalReturnPath(
+      `${location.pathname}${location.hash}`,
+    );
+    navigate(
+      currentPath === '/'
+        ? '/'
+        : `/?returnTo=${encodeURIComponent(currentPath)}`,
+      { replace: true },
+    );
+  }, [location.hash, location.pathname, navigate]);
+
+  const broadcastLogout = useCallback(() => {
+    authChannel.current?.postMessage({ type: 'logout' });
+    // This fallback carries only a timestamp-like signal, never any credential or token.
+    try {
+      window.localStorage.setItem(AUTH_LOGOUT_STORAGE_KEY, String(Date.now()));
+      window.localStorage.removeItem(AUTH_LOGOUT_STORAGE_KEY);
+    } catch {
+      // Private browsing/storage policies may disable this fallback; BroadcastChannel remains enough.
+    }
+  }, []);
+
+  useEffect(() => {
+    const signOutFromElsewhere = () => {
+      clearAuthentication('You were signed out in another browser tab.');
+      navigateToSignIn();
+    };
+    const handleExpiredSession = () => {
+      clearAuthentication('Your session expired. Sign in again to continue.');
+      navigateToSignIn();
+    };
+    const handleForbidden = () => navigate('/forbidden', { replace: true });
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === AUTH_LOGOUT_STORAGE_KEY) signOutFromElsewhere();
+    };
+
+    const channel =
+      typeof BroadcastChannel === 'function'
+        ? new BroadcastChannel('odoc-auth')
+        : null;
+    authChannel.current = channel;
+    if (channel) {
+      channel.onmessage = (event: MessageEvent<{ type?: string }>) => {
+        if (event.data?.type === 'logout') signOutFromElsewhere();
+      };
+    }
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleExpiredSession);
+    window.addEventListener(AUTH_FORBIDDEN_EVENT, handleForbidden);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      authChannel.current = null;
+      channel?.close();
+      window.removeEventListener(
+        AUTH_SESSION_EXPIRED_EVENT,
+        handleExpiredSession,
+      );
+      window.removeEventListener(AUTH_FORBIDDEN_EVENT, handleForbidden);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [clearAuthentication, navigate, navigateToSignIn]);
+
   useEffect(() => {
     let active = true;
+    void odocApi.registrationPolicy().then(
+      (policy) => active && setRegistrationPolicy(policy),
+      () =>
+        active &&
+        setRegistrationPolicy({
+          registrationEnabled: false,
+          inviteOnly: false,
+        }),
+    );
     void odocApi.session().then(
       (existingSession) => {
         if (!active) return;
@@ -2101,24 +2565,34 @@ export function App() {
   }, [establishSession]);
 
   const login = useCallback(
-    async (input: LoginCredentials, createAccount: boolean) => {
+    async (input: RegistrationCredentials, createAccount: boolean) => {
       const nextSession = createAccount
         ? await odocApi.register(input)
         : await odocApi.login(input);
       establishSession(nextSession);
+      setAuthNotice(null);
+      const target = safeLocalReturnPath(
+        new URLSearchParams(location.search).get('returnTo'),
+      );
+      if (target !== '/') navigate(target, { replace: true });
     },
-    [establishSession],
+    [establishSession, location.search, navigate],
   );
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    let notice: string | undefined;
     if (credentials) {
-      void odocApi.logout(credentials).catch(() => undefined);
+      try {
+        await odocApi.logout(credentials);
+      } catch {
+        notice =
+          'Odoc could not reach the server to revoke this session. This browser is signed out locally.';
+      }
     }
-    queryClient.clear();
-    setCredentials(null);
-    setSession(null);
-    setAuthState('anonymous');
-  }, [credentials]);
+    broadcastLogout();
+    clearAuthentication(notice);
+    navigateToSignIn();
+  }, [broadcastLogout, clearAuthentication, credentials, navigateToSignIn]);
 
   const verifyEmail = useCallback(
     async (verifier: string) => {
@@ -2174,30 +2648,47 @@ export function App() {
           </Link>
         </header>
         <AppErrorBoundary>
-          <AppRoutes
+            <AppRoutes
             home={
               authState === 'checking' ? (
                 <main id="main-content" className="login-shell">
                   Checking your session…
                 </main>
               ) : credentials && session ? (
-                <Workspace
-                  credentials={credentials}
-                  session={session}
-                  onLogout={logout}
-                  onVerifyEmail={verifyEmail}
-                  onResendEmailVerification={resendEmailVerification}
-                  onPasswordChange={changePassword}
-                />
+                session.emailVerified ? (
+                  <Workspace
+                    credentials={credentials}
+                    session={session}
+                    onLogout={logout}
+                    onVerifyEmail={verifyEmail}
+                    onResendEmailVerification={resendEmailVerification}
+                    onPasswordChange={changePassword}
+                  />
+                ) : (
+                  <EmailVerificationScreen
+                    email={session.email}
+                    onVerify={verifyEmail}
+                    onResend={resendEmailVerification}
+                    onLogout={logout}
+                  />
+                )
               ) : (
                 <LoginPage
                   onLogin={login}
                   onRequestPasswordRecovery={requestPasswordRecovery}
                   onCompletePasswordRecovery={completePasswordRecovery}
+                  registrationPolicy={registrationPolicy}
+                  authNotice={authNotice}
                 />
               )
             }
             forbidden={<ForbiddenPage />}
+            invitation={
+              <InvitationAcceptancePage
+                credentials={credentials}
+                authState={authState}
+              />
+            }
             catalog={
               <>
                 <DocumentMetadata title="Component catalog" />

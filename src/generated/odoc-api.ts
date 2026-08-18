@@ -36,6 +36,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list"];
+        put?: never;
+        post: operations["create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspaceId}/ownership-transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["transferOwnership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspaceId}/members": {
         parameters: {
             query?: never;
@@ -68,16 +100,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/workspaces/invitations/accept": {
+    "/api/v1/workspaces/{workspaceId}/groups": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["groups"];
         put?: never;
-        post: operations["acceptInvitation"];
+        post: operations["createGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspaceId}/groups/{groupId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["groupMembers"];
+        put?: never;
+        post: operations["addGroupMember"];
         delete?: never;
         options?: never;
         head?: never;
@@ -91,9 +139,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["list_1"];
         put?: never;
-        post: operations["create"];
+        post: operations["create_1"];
         delete?: never;
         options?: never;
         head?: never;
@@ -107,7 +155,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list_1"];
+        get: operations["list_2"];
         put?: never;
         post: operations["attach"];
         delete?: never;
@@ -123,9 +171,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list_2"];
+        get: operations["list_3"];
         put?: never;
-        post: operations["create_1"];
+        post: operations["create_2"];
         delete?: never;
         options?: never;
         head?: never;
@@ -171,9 +219,41 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list_3"];
+        get: operations["list_4"];
         put?: never;
-        post: operations["create_2"];
+        post: operations["create_3"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/invitations/{routeId}/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["exchange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/invitations/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["accept"];
         delete?: never;
         options?: never;
         head?: never;
@@ -276,6 +356,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/fresh-authentication": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refreshAuthentication"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/email-verification": {
         parameters: {
             query?: never;
@@ -308,14 +404,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/workspaces": {
+    "/api/v1/workspaces/{workspaceId}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["list_4"];
+        get: operations["get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["update_1"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspaceId}/members/{memberId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["remove"];
+        options?: never;
+        head?: never;
+        patch: operations["updateMember"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspaceId}/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["page"];
         put?: never;
         post?: never;
         delete?: never;
@@ -379,7 +507,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["get_2"];
+        get: operations["get_3"];
         put?: never;
         post?: never;
         delete: operations["delete_2"];
@@ -404,17 +532,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/workspaces/{workspaceId}/members/{memberId}": {
+    "/api/v1/auth/registration-policy": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["registrationPolicy"];
         put?: never;
         post?: never;
-        delete: operations["remove"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -431,6 +559,22 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["revokeInvitation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspaceId}/groups/{groupId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["removeGroupMember"];
         options?: never;
         head?: never;
         patch?: never;
@@ -458,6 +602,22 @@ export interface components {
             /** Format: date-time */
             updatedAt?: string;
         };
+        CreateWorkspaceRequest: {
+            name: string;
+        };
+        WorkspaceResponse: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            role?: "OWNER" | "MEMBER";
+            /** Format: int64 */
+            revision?: number;
+        };
+        TransferWorkspaceOwnershipRequest: {
+            /** Format: uuid */
+            successorUserId: string;
+        };
         InviteWorkspaceMemberRequest: {
             /** Format: email */
             email: string;
@@ -476,14 +636,31 @@ export interface components {
         WorkspaceInvitationResponse: {
             /** Format: uuid */
             id?: string;
+            /** Format: uuid */
+            routeId?: string;
             email?: string;
             /** Format: date-time */
             expiresAt?: string;
             /** Format: date-time */
             createdAt?: string;
         };
-        AcceptWorkspaceInvitationRequest: {
-            verifier: string;
+        CreateWorkspaceGroupRequest: {
+            name: string;
+        };
+        WorkspaceGroupResponse: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            status?: "ACTIVE" | "SUSPENDED";
+            /** Format: int64 */
+            revision?: number;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        AddWorkspaceGroupMemberRequest: {
+            /** Format: uuid */
+            userId: string;
         };
         CreateSpaceRequest: {
             key: string;
@@ -557,10 +734,14 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
         };
-        Credentials: {
+        ExchangeWorkspaceInvitationRequest: {
+            verifier: string;
+        };
+        RegistrationRequest: {
             /** Format: email */
             email: string;
             password: string;
+            invitationVerifier?: string;
         };
         SessionResponse: {
             /** Format: uuid */
@@ -582,15 +763,48 @@ export interface components {
             verifier: string;
             newPassword: string;
         };
+        Credentials: {
+            /** Format: email */
+            email: string;
+            password: string;
+        };
+        FreshAuthenticationRequest: {
+            password: string;
+        };
         VerificationRequest: {
             verifier: string;
         };
-        WorkspaceResponse: {
+        UpdateWorkspaceRequest: {
+            name: string;
+        };
+        UpdateWorkspaceMemberRequest: {
+            /** @enum {string} */
+            role: "OWNER" | "MEMBER";
+        };
+        WorkspaceGroupMemberResponse: {
+            /** Format: uuid */
+            userId?: string;
+            email?: string;
+            /** Format: date-time */
+            joinedAt?: string;
+        };
+        AuditEventPageResponse: {
+            items?: components["schemas"]["AuditEventResponse"][];
+            nextCursor?: string;
+        };
+        AuditEventResponse: {
             /** Format: uuid */
             id?: string;
-            name?: string;
-            /** @enum {string} */
-            role?: "OWNER" | "MEMBER";
+            /** Format: uuid */
+            actorUserId?: string;
+            action?: string;
+            targetType?: string;
+            /** Format: uuid */
+            targetId?: string;
+            outcome?: string;
+            requestId?: string;
+            /** Format: date-time */
+            occurredAt?: string;
         };
         SystemInfoResponse: {
             name?: string;
@@ -607,6 +821,10 @@ export interface components {
             content?: string;
             /** Format: date-time */
             createdAt?: string;
+        };
+        RegistrationPolicyResponse: {
+            registrationEnabled?: boolean;
+            inviteOnly?: boolean;
         };
     };
     responses: never;
@@ -749,6 +967,74 @@ export interface operations {
             };
         };
     };
+    list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkspaceResponse"][];
+                };
+            };
+        };
+    };
+    create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkspaceResponse"];
+                };
+            };
+        };
+    };
+    transferOwnership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferWorkspaceOwnershipRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     members: {
         parameters: {
             query?: never;
@@ -845,16 +1131,90 @@ export interface operations {
             };
         };
     };
-    acceptInvitation: {
+    groups: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                workspaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkspaceGroupResponse"][];
+                };
+            };
+        };
+    };
+    createGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: string;
+            };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AcceptWorkspaceInvitationRequest"];
+                "application/json": components["schemas"]["CreateWorkspaceGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkspaceGroupResponse"];
+                };
+            };
+        };
+    };
+    groupMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: string;
+                groupId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkspaceGroupMemberResponse"][];
+                };
+            };
+        };
+    };
+    addGroupMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: string;
+                groupId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddWorkspaceGroupMemberRequest"];
             };
         };
         responses: {
@@ -867,7 +1227,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    list_1: {
         parameters: {
             query?: never;
             header?: never;
@@ -887,7 +1247,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    create_1: {
         parameters: {
             query?: never;
             header?: never;
@@ -911,7 +1271,7 @@ export interface operations {
             };
         };
     };
-    list_1: {
+    list_2: {
         parameters: {
             query?: never;
             header?: never;
@@ -959,7 +1319,7 @@ export interface operations {
             };
         };
     };
-    list_2: {
+    list_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -981,7 +1341,7 @@ export interface operations {
             };
         };
     };
-    create_1: {
+    create_2: {
         parameters: {
             query?: never;
             header?: never;
@@ -1059,7 +1419,7 @@ export interface operations {
             };
         };
     };
-    list_3: {
+    list_4: {
         parameters: {
             query?: never;
             header?: never;
@@ -1081,7 +1441,7 @@ export interface operations {
             };
         };
     };
-    create_2: {
+    create_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -1107,6 +1467,48 @@ export interface operations {
             };
         };
     };
+    exchange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeWorkspaceInvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    accept: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     register: {
         parameters: {
             query?: never;
@@ -1116,7 +1518,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Credentials"];
+                "application/json": components["schemas"]["RegistrationRequest"];
             };
         };
         responses: {
@@ -1241,6 +1643,28 @@ export interface operations {
             };
         };
     };
+    refreshAuthentication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FreshAuthenticationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     verifyEmail: {
         parameters: {
             query?: never;
@@ -1281,11 +1705,13 @@ export interface operations {
             };
         };
     };
-    list_4: {
+    get_2: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                workspaceId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1296,7 +1722,108 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["WorkspaceResponse"][];
+                    "*/*": components["schemas"]["WorkspaceResponse"];
+                };
+            };
+        };
+    };
+    update_1: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                workspaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkspaceResponse"];
+                };
+            };
+        };
+    };
+    remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: string;
+                memberId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: string;
+                memberId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWorkspaceMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkspaceMemberResponse"];
+                };
+            };
+        };
+    };
+    page: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AuditEventPageResponse"];
                 };
             };
         };
@@ -1365,7 +1892,7 @@ export interface operations {
             };
         };
     };
-    get_2: {
+    get_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -1427,13 +1954,33 @@ export interface operations {
             };
         };
     };
-    remove: {
+    registrationPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["RegistrationPolicyResponse"];
+                };
+            };
+        };
+    };
+    revokeInvitation: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspaceId: string;
-                memberId: string;
+                invitationId: string;
             };
             cookie?: never;
         };
@@ -1448,13 +1995,14 @@ export interface operations {
             };
         };
     };
-    revokeInvitation: {
+    removeGroupMember: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 workspaceId: string;
-                invitationId: string;
+                groupId: string;
+                userId: string;
             };
             cookie?: never;
         };

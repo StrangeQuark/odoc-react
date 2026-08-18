@@ -1,8 +1,12 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { expectNoAxeViolations } from '../test/axe';
+import { server } from '../test/server';
+import { AUTH_SESSION_EXPIRED_EVENT } from '../shared/api';
+import { safeLocalReturnPath } from './authNavigation';
 import { App } from './App';
 
 const { getRuntimeConfig } = vi.hoisted(() => ({ getRuntimeConfig: vi.fn() }));
@@ -29,6 +33,112 @@ describe('App', () => {
     expect(
       await screen.findByRole('heading', { name: 'Odoc could not start.' }),
     ).toBeInTheDocument();
+  });
+
+  it('accepts only local relative return paths', () => {
+    expect(safeLocalReturnPath('/spaces/engineering?view=recent')).toBe(
+      '/spaces/engineering?view=recent',
+    );
+    expect(safeLocalReturnPath('https://example.test/steal')).toBe('/');
+    expect(safeLocalReturnPath('//example.test/steal')).toBe('/');
+    expect(safeLocalReturnPath('\\\\example.test')).toBe('/');
+  });
+
+  it('enrolls a new account with a workspace invitation when invite-only is enabled', async () => {
+    document.cookie = 'ODOC_CSRF=test-csrf-token; path=/';
+    let received: unknown;
+    server.use(
+      http.get('/api/v1/auth/registration-policy', () =>
+        HttpResponse.json({ registrationEnabled: true, inviteOnly: true }),
+      ),
+      http.post('/api/v1/auth/register', async ({ request }) => {
+        received = await request.json();
+        return HttpResponse.json(
+          {
+            userId: 'invited-user',
+            email: 'member@example.test',
+            expiresAt: '2026-08-18T18:00:00Z',
+            emailVerified: false,
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Create an account with an invitation code',
+      }),
+    );
+    await user.type(screen.getByLabelText('Email'), 'member@example.test');
+    await user.type(screen.getByLabelText('Password'), 'a-long-local-password');
+    await user.type(
+      screen.getByLabelText('Workspace invitation code'),
+      'one-time-invitation-verifier',
+    );
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Verify your email' }),
+    ).toBeVisible();
+    expect(received).toEqual({
+      email: 'member@example.test',
+      password: 'a-long-local-password',
+      invitationVerifier: 'one-time-invitation-verifier',
+    });
+  });
+
+  it('exchanges an invitation fragment once and immediately removes it from the current URL', async () => {
+    let verifier: string | undefined;
+    window.history.replaceState(null, '', '/invitations/invite-route#v=fragment-verifier');
+    server.use(
+      http.post('/api/v1/invitations/invite-route/exchange', async ({ request }) => {
+        verifier = (await request.json() as { verifier: string }).verifier;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/invitations/invite-route']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText(
+        'Invitation confirmed. Sign in with the invited email address to join the workspace.',
+      ),
+    ).toBeVisible();
+    expect(verifier).toBe('fragment-verifier');
+    expect(window.location.hash).toBe('');
+    expect(window.location.pathname).toBe('/invitations/invite-route');
+  });
+
+  it('shows an expiry prompt after a protected request reports an expired session', async () => {
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', {
+      name: 'Build a home for what your team knows.',
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
+    });
+
+    expect(
+      await screen.findByText(
+        'Your session expired. Sign in again to continue.',
+      ),
+    ).toBeVisible();
   });
 
   it('has no baseline automated accessibility violations at sign in', async () => {
@@ -74,16 +184,78 @@ describe('App', () => {
     ).toBeVisible();
   });
 
+  it('keeps an unverified account out of workspace queries until its email is verified', async () => {
+    document.cookie = 'ODOC_CSRF=test-csrf-token; path=/';
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation((input) => {
+        const url = String(input);
+        if (url.endsWith('/auth/session')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ status: 401, detail: 'Sign in is required.' }),
+              {
+                status: 401,
+                headers: { 'Content-Type': 'application/problem+json' },
+              },
+            ),
+          );
+        }
+        if (url.endsWith('/auth/login')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                userId: 'user-unverified',
+                email: 'unverified@example.test',
+                expiresAt: '2026-08-16T00:00:00Z',
+                emailVerified: false,
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response('[]', { status: 200 }));
+      });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await user.type(
+      await screen.findByLabelText('Email'),
+      'unverified@example.test',
+    );
+    await user.type(screen.getByLabelText('Password'), 'a-long-local-password');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Verify your email' }),
+    ).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/v1/workspaces',
+      expect.anything(),
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/v1/spaces',
+      expect.anything(),
+    );
+  });
+
   it('lets a local developer enter a space and see an attached repository', async () => {
     document.cookie = 'ODOC_CSRF=test-csrf-token; path=/';
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
       const url = String(input);
       if (url.endsWith('/auth/session')) {
         return Promise.resolve(
-          new Response(JSON.stringify({ status: 401, detail: 'Sign in is required.' }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/problem+json' },
-          }),
+          new Response(
+            JSON.stringify({ status: 401, detail: 'Sign in is required.' }),
+            {
+              status: 401,
+              headers: { 'Content-Type': 'application/problem+json' },
+            },
+          ),
         );
       }
       if (url.endsWith('/auth/login')) {
@@ -107,6 +279,7 @@ describe('App', () => {
                 id: 'workspace-1',
                 name: 'Engineering workspace',
                 role: 'OWNER',
+                revision: 0,
               },
             ]),
             { status: 200 },
