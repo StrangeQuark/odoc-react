@@ -78,6 +78,9 @@ export function createThinSliceCommandHandler() {
 
 /** Stable API fixtures for frontend work that does not need a live Compose stack. */
 export const handlers = [
+  http.get('/api/v1/auth/registration-policy', () =>
+    HttpResponse.json({ registrationEnabled: true, inviteOnly: false }),
+  ),
   http.get('/api/v1/auth/session', () =>
     HttpResponse.json(
       {
