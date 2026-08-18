@@ -1,0 +1,54 @@
+name: Sync published OpenAPI contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      contract_url:
+        description: Immutable URL for the published odoc-v1.json artifact
+        required: true
+        type: string
+      manifest_url:
+        description: Immutable URL for the matching contract-manifest.json
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-openapi-contract
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Download immutable backend contract artifact
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output openapi/odoc-v1.json '${{ inputs.contract_url }}'
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output openapi/contract-manifest.json '${{ inputs.manifest_url }}'
+      - name: Generate and verify contract boundary
+        run: |
+          pnpm api:generate
+          pnpm api:check
+      - name: Create contract-update pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: automation/openapi-contract-update
+          commit-message: 'chore(api): sync published OpenAPI contract'
+          title: 'chore(api): sync published OpenAPI contract'
+          body: |
+            Automated update from the immutable backend contract artifact supplied
+            to this workflow run. The manifest checksum and generated client check
+            passed before this PR was created.
+          labels: api-contract, automated

@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 const onePixelPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JxjwAAAAASUVORK5CYII=',
@@ -14,11 +15,13 @@ const tinyWebm = Buffer.from(
 );
 
 async function createEditablePage(page: Page, label: string) {
-  const suffix = `${label}-${Date.now()}`;
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Enter Odoc' }).click();
+  // Fully-parallel browser runs can start within the same millisecond. Keep
+  // fixture data unique without sharing a mutable test counter between workers.
+  const suffix = `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   await page.getByRole('button', { name: 'Create space' }).click();
-  await page.getByLabel('Key').fill(`ED${Date.now().toString().slice(-6)}`);
+  await page
+    .getByLabel('Key')
+    .fill(`ED${Math.random().toString(36).slice(2, 12).toUpperCase()}`);
   await page.getByLabel('Name').fill(`Editor ${suffix}`);
   await page.getByRole('button', { name: 'Create space' }).last().click();
   await page.getByRole('button', { name: 'New page' }).click();
@@ -28,7 +31,7 @@ async function createEditablePage(page: Page, label: string) {
 }
 
 test('keeps Tab in the editor and saves intentional blank paragraphs', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'tab');
@@ -49,7 +52,7 @@ test('keeps Tab in the editor and saves intentional blank paragraphs', async ({
 });
 
 test('keeps an unsaved editor open when logout navigation is dismissed', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'exit-guard');
@@ -64,11 +67,11 @@ test('keeps an unsaved editor open when logout navigation is dismissed', async (
 
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Log out' }).click();
-  await expect(page.getByRole('button', { name: 'Enter Odoc' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
 });
 
 test('blocks workspace navigation while media is uploading', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'upload-exit-guard');
@@ -95,7 +98,7 @@ test('blocks workspace navigation while media is uploading', async ({
 });
 
 test('nests and outdents task items without leaving the editor', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'task-tab');
@@ -119,7 +122,7 @@ test('nests and outdents task items without leaving the editor', async ({
 });
 
 test('imports media through the picker and persists caption and positioning', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'media');
@@ -178,7 +181,7 @@ test('imports media through the picker and persists caption and positioning', as
 });
 
 test('moves selected media with keyboard-accessible controls', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'move-media');
@@ -218,7 +221,7 @@ test('moves selected media with keyboard-accessible controls', async ({
 });
 
 test('cleans up an upload removed before it can be published', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'remove-upload');
@@ -245,7 +248,7 @@ test('cleans up an upload removed before it can be published', async ({
 });
 
 test('imports a dropped video as a positioned document node', async ({
-  page,
+  authenticatedPage: page,
 }) => {
   test.setTimeout(45_000);
   const editor = await createEditablePage(page, 'drop-video');

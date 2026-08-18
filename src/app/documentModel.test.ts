@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DOCUMENT_SCHEMA_VERSION,
   mediaValidationMessage,
   parseDocument,
   serialiseDocument,
@@ -42,6 +43,78 @@ describe('document model', () => {
       },
     });
     expect(serialiseDocument(document)).not.toContain('blob:');
+  });
+
+  it('writes a versioned envelope and renders unknown nodes as safe fallback text', () => {
+    const document = parseDocument(
+      JSON.stringify({
+        schemaVersion: 99,
+        document: {
+          type: 'doc',
+          content: [
+            {
+              type: 'untrustedWidget',
+              content: [{ type: 'text', text: 'Do not execute this' }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(document.content?.[0]).toMatchObject({
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'Do not execute this' }],
+    });
+    expect(JSON.parse(serialiseDocument(document))).toMatchObject({
+      schemaVersion: DOCUMENT_SCHEMA_VERSION,
+      document: { type: 'doc' },
+    });
+  });
+
+  it('keeps allowlisted media presentation metadata through envelope serialisation', () => {
+    const document = parseDocument(
+      JSON.stringify({
+        type: 'doc',
+        content: [
+          {
+            type: 'media',
+            attrs: {
+              assetId: 'asset-1',
+              src: '/api/v1/media/asset-1',
+              alt: 'Diagram',
+              caption: 'Odoc architecture overview',
+              align: 'right',
+              width: 'small',
+              ignoredAttribute: '<script>nope</script>',
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(document.content?.[0]?.attrs).toMatchObject({
+      caption: 'Odoc architecture overview',
+      align: 'right',
+      width: 'small',
+    });
+    expect(serialiseDocument(document)).not.toContain('ignoredAttribute');
+  });
+
+  it('round-trips a 10,000-block document through the versioned schema', () => {
+    const source = {
+      type: 'doc',
+      content: Array.from({ length: 10_000 }, (_, index) => ({
+        type: 'paragraph',
+        content: [{ type: 'text', text: `Block ${index}` }],
+      })),
+    };
+    const startedAt = performance.now();
+    const restored = parseDocument(serialiseDocument(source));
+
+    expect(restored.content).toHaveLength(10_000);
+    // This catches accidental quadratic traversal without hard-coding a
+    // device-specific performance target into the product contract.
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
   });
 
   it('validates media choices before a network upload starts', () => {

@@ -19,6 +19,47 @@ export const MEDIA_FILE_ACCEPT = ACCEPTED_MEDIA_TYPES.join(',');
 export const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const MAX_VIDEO_UPLOAD_BYTES = 25 * 1024 * 1024;
 
+/**
+ * The persisted envelope is intentionally independent from a particular
+ * Tiptap release. Phase 2 will validate and migrate this same format on the
+ * server; keeping the version here now prevents editor extensions from
+ * silently becoming a storage contract.
+ */
+export const DOCUMENT_SCHEMA_VERSION = 1;
+
+type DocumentEnvelope = {
+  schemaVersion: number;
+  document: JSONContent;
+};
+
+const BLOCK_NODE_TYPES = new Set([
+  'paragraph',
+  'heading',
+  'bulletList',
+  'orderedList',
+  'listItem',
+  'taskList',
+  'taskItem',
+  'blockquote',
+  'codeBlock',
+  'horizontalRule',
+  'table',
+  'tableRow',
+  'tableHeader',
+  'tableCell',
+  'media',
+]);
+
+const ALLOWED_MARK_TYPES = new Set([
+  'bold',
+  'italic',
+  'underline',
+  'strike',
+  'code',
+  'highlight',
+  'link',
+]);
+
 export function mediaKindForContentType(contentType: string): MediaKind | null {
   if (contentType.startsWith('image/')) return 'image';
   if (contentType.startsWith('video/')) return 'video';
@@ -52,18 +93,45 @@ function paragraph(text = ''): JSONContent {
   return { type: 'paragraph', content: textNode(text) };
 }
 
+function plainText(node: JSONContent): string {
+  const ownText = typeof node.text === 'string' ? node.text : '';
+  return ownText + (node.content?.map(plainText).join('') ?? '');
+}
+
+function normaliseMarks(node: JSONContent): JSONContent['marks'] {
+  return node.marks
+    ?.filter((mark) => mark.type && ALLOWED_MARK_TYPES.has(mark.type))
+    .flatMap((mark) => {
+      if (mark.type !== 'link') return [mark];
+      const href = mark.attrs?.href;
+      if (typeof href !== 'string') return [];
+      try {
+        const protocol = new URL(href, 'https://odoc.invalid').protocol;
+        return ['http:', 'https:', 'mailto:'].includes(protocol) ? [mark] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
 function mediaNode({
   assetId = null,
   src,
   alt = '',
+  caption = '',
+  align = 'center',
   filename = '',
   mediaType = 'image',
+  width = 'wide',
 }: {
   assetId?: string | null;
   src: string;
   alt?: string;
+  caption?: string;
+  align?: MediaAlign;
   filename?: string;
   mediaType?: MediaKind;
+  width?: MediaWidth;
 }): JSONContent {
   return {
     type: 'media',
@@ -71,14 +139,14 @@ function mediaNode({
       assetId,
       src,
       alt,
-      caption: '',
-      align: 'center',
+      caption,
+      align,
       mediaType,
       filename,
       uploading: false,
       uploadId: null,
       error: null,
-      width: 'wide',
+      width,
     },
   };
 }
@@ -171,7 +239,14 @@ function legacyMarkdownToDocument(markdown: string): JSONContent {
   return { type: 'doc', content: content.length ? content : [paragraph()] };
 }
 
-function normaliseNode(node: JSONContent): JSONContent {
+function normaliseNode(node: JSONContent, parentIsBlock = false): JSONContent {
+  if (node.type === 'doc') {
+    return {
+      type: 'doc',
+      content: node.content?.map((child) => normaliseNode(child)),
+    };
+  }
+
   if (node.type === 'image') {
     const src = String(node.attrs?.src ?? '');
     return mediaNode({
@@ -182,9 +257,59 @@ function normaliseNode(node: JSONContent): JSONContent {
     });
   }
 
+  if (node.type === 'text') {
+    return {
+      type: 'text',
+      text: typeof node.text === 'string' ? node.text : '',
+      marks: normaliseMarks(node),
+    };
+  }
+
+  if (node.type === 'hardBreak') return { type: 'hardBreak' };
+
+  if (!node.type || !BLOCK_NODE_TYPES.has(node.type)) {
+    const replacement = plainText(node).trim() || 'Unsupported content';
+    return parentIsBlock
+      ? { type: 'text', text: replacement }
+      : paragraph(replacement);
+  }
+
+  if (node.type === 'media') {
+    const attrs = node.attrs ?? {};
+    const src = typeof attrs.src === 'string' ? attrs.src : '';
+    return mediaNode({
+      assetId: typeof attrs.assetId === 'string' ? attrs.assetId : null,
+      src,
+      alt: typeof attrs.alt === 'string' ? attrs.alt : '',
+      caption: typeof attrs.caption === 'string' ? attrs.caption : '',
+      align:
+        attrs.align === 'left' || attrs.align === 'right'
+          ? attrs.align
+          : 'center',
+      filename: typeof attrs.filename === 'string' ? attrs.filename : '',
+      mediaType: attrs.mediaType === 'video' ? 'video' : 'image',
+      width:
+        attrs.width === 'small' ||
+        attrs.width === 'medium' ||
+        attrs.width === 'full'
+          ? attrs.width
+          : 'wide',
+    });
+  }
+
+  const attrs = { ...(node.attrs ?? {}) };
+  if (node.type === 'heading') {
+    const level = Number(attrs.level);
+    attrs.level =
+      Number.isInteger(level) && level >= 1 && level <= 4 ? level : 1;
+  }
+
   return {
     ...node,
-    content: node.content?.map(normaliseNode),
+    attrs: Object.keys(attrs).length ? attrs : undefined,
+    content: node.content?.map((child) =>
+      normaliseNode(child, BLOCK_NODE_TYPES.has(node.type ?? '')),
+    ),
   };
 }
 
@@ -195,9 +320,13 @@ function normaliseNode(node: JSONContent): JSONContent {
  */
 export function parseDocument(content: string): JSONContent {
   try {
-    const parsed = JSON.parse(content) as JSONContent;
-    if (parsed.type === 'doc' && Array.isArray(parsed.content)) {
-      return normaliseNode(parsed);
+    const parsed = JSON.parse(content) as JSONContent | DocumentEnvelope;
+    const document =
+      'document' in parsed && typeof parsed.schemaVersion === 'number'
+        ? parsed.document
+        : parsed;
+    if (document.type === 'doc' && Array.isArray(document.content)) {
+      return normaliseNode(document);
     }
   } catch {
     // Legacy Markdown is intentionally converted client-side during the MVP migration.
@@ -210,5 +339,9 @@ export function emptyDocument(): JSONContent {
 }
 
 export function serialiseDocument(document: JSONContent): string {
-  return JSON.stringify(document);
+  const envelope: DocumentEnvelope = {
+    schemaVersion: DOCUMENT_SCHEMA_VERSION,
+    document: normaliseNode(document),
+  };
+  return JSON.stringify(envelope);
 }

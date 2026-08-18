@@ -1,0 +1,4 @@
+allowBuilds:
+  # MSW does not need an install script for browser/service-worker-free unit
+  # fixtures. Refuse it explicitly so frozen installs are deterministic.
+  msw: false
