@@ -1,0 +1,24 @@
+{
+  "formatVersion": 1,
+  "keyMaterial": "_EOmhDArfDs6tHFDEAdwUZV9XyGpqyhBg6-uUmm2f_A",
+  "noncePrefix": "7OSy15fPFcI",
+  "manifestNonce": "OE08TPYABRFuEpXv",
+  "manifestAad": "odoc-manifest-v1|object=object-test-0001|scope=workspace:workspace-test|purpose=media-object|version=1|key=1",
+  "manifestCiphertextAndTag": "74WWLgIkOIcjRNDxl-pw5LDOmrohJyX_PmPGX1Fuy0xXDmKbYZe7_gxblFjtMjhi12OrGLLihimKZRTgbZAcsuHF2NGkolDa48YyvUIxR_AXuUr5fw_aK5xYt0Eh4d0N8hVpbPvt8KX8Sf0I1sCfllKiE7dSqeJ5kYkVP2E4ieGYJdoXJEedjAspucM7LJnbuE8QbcoG1409dY45oWfYxHZSi9JHs80Kycb3ZNgIaHiGHIWTcp0aLYQaQ0v_eKfjAlzt0jVs0Xler8Cn6QrtnnGSve31RGkueIlapStftwDzqF23rG1r4g1iUYUlB79ulZJhKxPeNPcyaNZC0y03hdbMKMF4Uo-pKfpd1ZxSm1_FvW1RTr2eU1SazIGW5f6JH5PXjAHtXo6JUFGRR3TH8z8kJluD0Gs6InfL8bOUYjB0kycvO1uWmnZEUOV-FZmljjFOw9hxjzwgik4PxX1oYBR0yn64G77tOgFZ982MSnG4WkzixT2fo87LhEZ6K8Kz4gpYbualDlSrYeUvLvGHxynReVQAVXqgmJ-mOpdbTzywUwe73KyailcqLheUDegxLpUVTYJL05bmPqF8KeCdTGUZiMzA06q568-7K-MnQXvZbQsfyOd8X2l-WvoyCHIn9n-71DW36CvMEU7DPTVv-5Q3MPM8prVGg53rxkbPqM1rkolABTCNLM5XQL8dnj2t_QUDVrhL3_D644T9aMJ4oA",
+  "manifestPlaintext": "{\"chunkCount\":5,\"chunkDigests\":[\"ae1583f52d25c4bbf6996135840f604614dacdc9fd90972a8f4eec6f4c948efc\",\"4125b4924ecfc90707ca638a2efb08e7fd49a99e41c904c0de60a546c89e4beb\",\"1b76f6a6b4b155e14740d4e8068da5e95f18030ceeb55fcc9332ee4a949bffb1\",\"838ddb0e3f801f7e6cac3eb33a95a9eb86fb6bb83d7e925dfe996b4f4c6ed574\",\"635ef557682a2ac3ffd79cb9b45b215952c0af13783ff5df07cb177077136e13\"],\"chunkSize\":8,\"keyVersion\":1,\"objectId\":\"object-test-0001\",\"plaintextLength\":36,\"purpose\":\"media-object\",\"securityScope\":\"workspace:workspace-test\",\"version\":1}",
+  "plaintext": "0123456789abcdefghijklmnopqrstuvwxyz",
+  "objectId": "object-test-0001",
+  "securityScope": "workspace:workspace-test",
+  "purpose": "media-object",
+  "version": 1,
+  "keyVersion": 1,
+  "chunkCount": 5,
+  "plaintextLength": 36,
+  "chunks": [
+    { "index": 0, "ciphertextAndTag": "i6GJonL902rGhSlE1SOivO9qcHjIyuQO" },
+    { "index": 1, "ciphertextAndTag": "VEqU0UdrAEFAjtlmIyJGia0dkc6SWqeB" },
+    { "index": 2, "ciphertextAndTag": "5vOdwcxQjtO3RbxmRx1LM-I-0lxXM7VP" },
+    { "index": 3, "ciphertextAndTag": "0GeVBSiowdg2D5rpaXU_ZITBMICGcoqq" },
+    { "index": 4, "ciphertextAndTag": "f3uXH7ExJlV1Vd4a2sjXIf3X9sg" }
+  ]
+}

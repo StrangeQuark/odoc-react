@@ -1,0 +1,127 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Odoc API",
+    "description": "Versioned API contract for the Odoc documentation workspace.",
+    "version": "v1"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Generated server url"
+    }
+  ],
+  "paths": {
+    "/api/v1/system/info": {
+      "get": {
+        "tags": ["system-info-controller"],
+        "operationId": "info",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": { "$ref": "#/components/schemas/SystemInfoResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/test/commands/echo": {
+      "post": {
+        "tags": ["Phase 0 test command"],
+        "summary": "Execute the Phase 0 idempotency contract command",
+        "description": "Test-profile-only endpoint. A repeated Idempotency-Key with the same payload replays the original response.",
+        "operationId": "echo",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThinSliceCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Previously accepted command replayed",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThinSliceCommandResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Command accepted for the first time",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThinSliceCommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command or idempotency key",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThinSliceCommandResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key was reused with a different payload",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThinSliceCommandResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SystemInfoResponse": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ThinSliceCommandRequest": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string", "minLength": 0, "maxLength": 240 }
+        }
+      },
+      "ThinSliceCommandResponse": {
+        "type": "object",
+        "properties": {
+          "executionId": { "type": "string", "format": "uuid" },
+          "message": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+# Generated contract artifacts retain the generator's canonical formatting.
+openapi/odoc-v1.json
+src/generated/

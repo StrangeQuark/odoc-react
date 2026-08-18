@@ -1,12 +1,14 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
-test('creates, edits, and deletes a documentation page', async ({ page }) => {
+test('creates, edits, and deletes a documentation page', async ({
+  authenticatedPage: page,
+}) => {
   test.setTimeout(20_000);
-  const suffix = Date.now().toString();
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Enter Odoc' }).click();
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   await page.getByRole('button', { name: 'Create space' }).click();
-  await page.getByLabel('Key').fill(`E2E${suffix.slice(-5)}`);
+  await page
+    .getByLabel('Key')
+    .fill(`E2E${Math.random().toString(36).slice(2, 12).toUpperCase()}`);
   await page.getByLabel('Name').fill(`E2E space ${suffix}`);
   await page.getByRole('button', { name: 'Create space' }).last().click();
   await page.getByRole('button', { name: 'New page' }).click();
