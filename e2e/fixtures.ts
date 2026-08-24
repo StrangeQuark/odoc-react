@@ -9,14 +9,12 @@ export const test = base.extend<{ authenticatedPage: Page }>({
   authenticatedPage: async ({ page }, provide) => {
     const email = `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 10)}@example.test`;
     await page.goto('/');
-    await page
-      .getByRole('button', { name: 'Create a local development account' })
-      .click();
+    await page.getByRole('button', { name: 'Create an account' }).click();
     await page.getByLabel('Email').fill(email);
     await page.getByLabel('Password').fill('correct-horse-battery-staple');
     await page.getByRole('button', { name: 'Create account' }).click();
     await expect(
-      page.getByRole('button', { name: 'Verify email' }),
+      page.getByRole('button', { name: 'Enter verification code' }),
     ).toBeVisible();
 
     let messageId = '';
@@ -44,11 +42,11 @@ export const test = base.extend<{ authenticatedPage: Page }>({
     const verifier = text.match(/code:\s*([A-Za-z0-9_-]+)/)?.[1];
     expect(verifier).toBeTruthy();
 
-    await page.getByRole('button', { name: 'Verify email' }).click();
+    await page.getByRole('button', { name: 'Enter verification code' }).click();
     await page.getByLabel('Verification code').fill(verifier!);
     await page.getByRole('button', { name: 'Verify email' }).last().click();
     await expect(
-      page.getByRole('button', { name: 'Verify email' }),
+      page.getByRole('button', { name: 'Enter verification code' }),
     ).toHaveCount(0);
     await expect(
       page.getByRole('button', { name: 'Create space' }),

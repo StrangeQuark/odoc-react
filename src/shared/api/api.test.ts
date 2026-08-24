@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiRequestError, odocApi } from './index';
+import { ApiRequestError, odocApi, retryAfterTime, supportDetails } from './index';
 import { createThinSliceCommandHandler } from '../../test/handlers';
 import { server } from '../../test/server';
 
@@ -83,6 +83,89 @@ describe('generated API contract boundary', () => {
       name: 'Engineering',
       description: '',
     });
+  });
+
+  it('uses the protected manual repository refresh endpoint', async () => {
+    server.use(
+      http.post('/api/v1/spaces/space-1/repositories/repository-1/refresh', ({ request }) => {
+        expect(request.headers.get('X-Odoc-Csrf')).toBe('test-csrf-token');
+        return HttpResponse.json({
+          id: 'repository-1',
+          spaceId: 'space-1',
+          githubUrl: 'https://github.com/octo/hello',
+          owner: 'octo',
+          name: 'hello',
+          description: 'Refreshed',
+          defaultBranch: 'main',
+          stars: 1,
+          readmeContent: '# Hello',
+          readmePath: 'README.md',
+          syncedAt: '2026-08-23T00:00:00Z',
+        });
+      }),
+    );
+
+    await expect(
+      odocApi.refreshRepository(credentials, 'space-1', 'repository-1'),
+    ).resolves.toMatchObject({ description: 'Refreshed' });
+  });
+
+  it('stores and maps a manually requested JavaDoc snapshot', async () => {
+    server.use(
+      http.post('/api/v1/spaces/space-1/repositories/repository-1/javadocs', async ({ request }) => {
+        expect(request.headers.get('X-Odoc-Csrf')).toBe('test-csrf-token');
+        expect(await request.json()).toEqual({ sourcePath: 'src/main/java/example/Guide.java' });
+        return HttpResponse.json({
+          id: 'snapshot-1',
+          sourcePath: 'src/main/java/example/Guide.java',
+          packageName: 'example',
+          typeName: 'Guide',
+          typeKind: 'class',
+          documentation: 'A guide.',
+          members: [{
+            kind: 'method', name: 'open', signature: 'public boolean open()', documentation: 'Opens.',
+            tags: [{ kind: 'return', subject: '', description: 'whether it opened' }],
+          }],
+          refreshedAt: '2026-08-23T00:00:00Z',
+        });
+      }),
+    );
+
+    await expect(odocApi.refreshJavaDocs(
+      credentials, 'space-1', 'repository-1', 'src/main/java/example/Guide.java',
+    )).resolves.toMatchObject({
+      typeName: 'Guide',
+      members: [expect.objectContaining({ name: 'open' })],
+    });
+  });
+
+  it('sends the current page revision when saving an edited page', async () => {
+    server.use(
+      http.put('/api/v1/pages/page-1', async ({ request }) => {
+        expect(request.headers.get('X-Odoc-Csrf')).toBe('test-csrf-token');
+        expect(request.headers.get('If-Match')).toBe('"revision-4"');
+        expect(await request.json()).toEqual({ title: 'After', content: '{}' });
+        return HttpResponse.json({
+          id: 'page-1',
+          spaceId: 'space-1',
+          parentId: null,
+          authorId: 'user-1',
+          title: 'After',
+          content: '{}',
+          plainText: '',
+          revision: 5,
+          createdAt: '2026-08-15T00:00:00Z',
+          updatedAt: '2026-08-15T00:01:00Z',
+        });
+      }),
+    );
+
+    await expect(
+      odocApi.updatePage(credentials, 'page-1', 4, {
+        title: 'After',
+        content: '{}',
+      }),
+    ).resolves.toMatchObject({ revision: 5, authorId: 'user-1' });
   });
 
   it('changes a local password through the cookie-session transport and refreshes the session shape', async () => {
@@ -295,5 +378,12 @@ describe('generated API contract boundary', () => {
       message: 'Request failed (502).',
       problem: { requestId: 'upstream-id', status: 502 },
     });
+  });
+
+  it('creates rate-limit and support details without retaining unsafe error material', () => {
+    const error = new ApiRequestError({ detail: 'Try later', errors: [], requestId: 'safe-request-id', status: 429, title: 'Too many' }, '30');
+    expect(retryAfterTime(error, 1000)).toBe(31_000);
+    expect(supportDetails(error, 'release-1')).toBe('Request ID: safe-request-id · Release: release-1');
+    expect(supportDetails(new Error('token=should-not-leak'), 'release-1')).toBe('Release: release-1');
   });
 });

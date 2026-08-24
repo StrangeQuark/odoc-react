@@ -18,6 +18,8 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   AUTH_FORBIDDEN_EVENT,
   AUTH_SESSION_EXPIRED_EVENT,
+  ApiRequestError,
+  retryAfterTime,
   odocApi,
   fetchAuthenticatedImage,
   readCsrfToken,
@@ -28,6 +30,7 @@ import {
   type RegistrationPolicy,
   type Page,
   type PageVersion,
+  type JavaDocSnapshot,
   type RepositoryBinding,
   type Space,
   type Workspace as WorkspaceInfo,
@@ -46,6 +49,9 @@ import { getRuntimeConfig } from '../shared/config/runtimeConfig';
 import { AppErrorBoundary } from './AppErrorBoundary';
 import { safeLocalReturnPath } from './authNavigation';
 import { AppRoutes } from '../routes/AppRoutes';
+import { OperationalStatus } from './OperationalStatus';
+import { RateLimitNotice } from './RateLimitNotice';
+import { searchSnippet, searchTextParts } from './searchPresentation';
 
 // Editing is a substantial dependency (ProseMirror/Tiptap and rich-media node
 // views), so it should not delay the initial workspace shell.
@@ -59,7 +65,19 @@ const RichTextEditor = lazy(async () => {
 });
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
+  defaultOptions: {
+    // Only idempotent query reads can retry. Mutations are never replayed by
+    // React Query: callers keep their local editor state and choose recovery.
+    queries: {
+      retry: (attempt, error) =>
+        attempt < 1 &&
+        (!(error instanceof ApiRequestError) ||
+          error.problem.status === 408 ||
+          error.problem.status >= 500),
+      staleTime: 10_000,
+    },
+    mutations: { retry: false },
+  },
 });
 
 /**
@@ -102,12 +120,14 @@ function LoginPage({
   const [recoveryPassword, setRecoveryPassword] = useState('');
   const [recoveryConfirmation, setRecoveryConfirmation] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [retryAt, setRetryAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setRetryAt(null);
     setSubmitting(true);
     try {
       await onLogin(
@@ -121,6 +141,7 @@ function LoginPage({
         createAccount,
       );
     } catch (reason) {
+      setRetryAt(retryAfterTime(reason));
       setError(
         reason instanceof Error
           ? reason.message
@@ -134,6 +155,7 @@ function LoginPage({
   async function requestRecovery(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setRetryAt(null);
     setNotice(null);
     setSubmitting(true);
     try {
@@ -143,6 +165,7 @@ function LoginPage({
         'If an account exists for that email, a reset code has been sent. In local Docker, open Mailpit on port 8025.',
       );
     } catch (reason) {
+      setRetryAt(retryAfterTime(reason));
       setError(
         reason instanceof Error
           ? reason.message
@@ -156,6 +179,7 @@ function LoginPage({
   async function completeRecovery(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setRetryAt(null);
     setNotice(null);
     if (recoveryPassword !== recoveryConfirmation) {
       setError('The new passwords do not match.');
@@ -174,6 +198,7 @@ function LoginPage({
       setPassword('');
       setNotice('Password updated. You can sign in with your new password.');
     } catch (reason) {
+      setRetryAt(retryAfterTime(reason));
       setError(
         reason instanceof Error
           ? reason.message
@@ -211,6 +236,7 @@ function LoginPage({
               />
             </FormField>
             {error && <p role="alert">{error}</p>}
+            <RateLimitNotice retryAt={retryAt} />
             {notice && <p role="status">{notice}</p>}
             <Button type="submit" disabled={submitting}>
               {submitting ? 'Sending…' : 'Email reset code'}
@@ -265,6 +291,7 @@ function LoginPage({
               />
             </FormField>
             {error && <p role="alert">{error}</p>}
+            <RateLimitNotice retryAt={retryAt} />
             <Button type="submit" disabled={submitting}>
               {submitting ? 'Resetting…' : 'Reset password'}
             </Button>
@@ -321,7 +348,8 @@ function LoginPage({
                 />
               </FormField>
             )}
-            {error && <p role="alert">{error}</p>}
+          {error && <p role="alert">{error}</p>}
+          <RateLimitNotice retryAt={retryAt} />
             {authNotice && <p role="status">{authNotice}</p>}
             <Button type="submit" disabled={submitting}>
               {submitting
@@ -452,7 +480,7 @@ function InvitationAcceptancePage({
   );
 }
 
-function MarkdownPreview({
+export function MarkdownPreview({
   content,
   credentials,
 }: {
@@ -593,6 +621,7 @@ function Workspace({
   const [selectedPage, setSelectedPage] = useState<Page | null>(null);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [newPageOpen, setNewPageOpen] = useState(false);
   const [newRepositoryOpen, setNewRepositoryOpen] = useState(false);
@@ -610,6 +639,10 @@ function Workspace({
     () => editorExitGuard.current?.() ?? true,
     [],
   );
+  useEffect(() => {
+    const delay = window.setTimeout(() => setDebouncedSearch(search.trim()), 200);
+    return () => window.clearTimeout(delay);
+  }, [search]);
   const spaces = useQuery({
     queryKey: ['spaces'],
     queryFn: ({ signal }) => odocApi.listSpaces(credentials, signal),
@@ -677,9 +710,9 @@ function Workspace({
     enabled: selectedSpace !== null,
   });
   const results = useQuery({
-    queryKey: ['search', search],
-    queryFn: ({ signal }) => odocApi.search(credentials, search, signal),
-    enabled: search.trim().length >= 2,
+    queryKey: ['search', debouncedSearch],
+    queryFn: ({ signal }) => odocApi.search(credentials, debouncedSearch, signal),
+    enabled: debouncedSearch.length >= 2,
   });
   const repositories = useQuery({
     queryKey: ['repositories', selectedSpace?.id],
@@ -728,7 +761,7 @@ function Workspace({
   });
   const createPage = useMutation({
     mutationFn: (
-      input: Pick<Page, 'title' | 'content'> & { parentId?: string },
+      input: Pick<Page, 'title' | 'content'> & { parentId?: string | null },
     ) => odocApi.createPage(credentials, selectedSpace!.id, input),
     onSuccess: (page) => {
       void queryClient.invalidateQueries({
@@ -741,9 +774,23 @@ function Workspace({
   });
   const updatePage = useMutation({
     mutationFn: (input: Pick<Page, 'title' | 'content'>) =>
-      odocApi.updatePage(credentials, selectedPage!.id, input),
+      odocApi.updatePage(
+        credentials,
+        selectedPage!.id,
+        selectedPage!.revision,
+        input,
+      ),
     onSuccess: (page) => {
       setSelectedPage(page);
+      void queryClient.invalidateQueries({ queryKey: ['pages', page.spaceId] });
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+    },
+  });
+  const reloadPage = useMutation({
+    mutationFn: () => odocApi.getPage(credentials, selectedPage!.id),
+    onSuccess: (page) => {
+      setSelectedPage(page);
+      setEditingPageId(null);
       void queryClient.invalidateQueries({ queryKey: ['pages', page.spaceId] });
       void queryClient.invalidateQueries({ queryKey: ['search'] });
     },
@@ -764,6 +811,15 @@ function Workspace({
         queryKey: ['repositories', selectedSpace?.id],
       });
       setNewRepositoryOpen(false);
+    },
+  });
+  const refreshRepository = useMutation({
+    mutationFn: (repository: RepositoryBinding) =>
+      odocApi.refreshRepository(credentials, repository.spaceId, repository.id),
+    onSuccess: (_, repository) => {
+      void queryClient.invalidateQueries({
+        queryKey: ['repositories', repository.spaceId],
+      });
     },
   });
   const inviteWorkspaceMember = useMutation({
@@ -901,6 +957,28 @@ function Workspace({
         {selectedWorkspace && visibleSpaces?.length === 0 && (
           <p className="muted">Create your first space to begin.</p>
         )}
+        {selectedSpace && (
+          <section className="sidebar-page-section" aria-label="Pages">
+            <div className="sidebar-heading sidebar-page-heading">
+              <span>Pages</span>
+              <button
+                onClick={() => setNewPageOpen(true)}
+                aria-label="Open new page dialog"
+              >
+                +
+              </button>
+            </div>
+            {pages.isPending && <p className="muted">Loading pages…</p>}
+            {pages.data && (
+              <PageTree
+                compact
+                pages={pages.data}
+                selectedPageId={selectedPage?.id}
+                onSelect={showPage}
+              />
+            )}
+          </section>
+        )}
       </aside>
       <section className="workspace-content">
         <div className="toolbar">
@@ -970,16 +1048,13 @@ function Workspace({
           </button>
         </div>
         {search.trim().length >= 2 && (
-          <section className="search-results" aria-live="polite">
-            <strong>Search results</strong>
-            {results.isPending && <p>Searching…</p>}
-            {results.data?.map((page) => (
-              <button key={page.id} onClick={() => showPage(page)}>
-                {page.title}
-              </button>
-            ))}
-            {results.data?.length === 0 && <p>No matching pages.</p>}
-          </section>
+          <SearchResults
+            query={search}
+            pages={results.data ?? []}
+            loading={results.isPending || search.trim() !== debouncedSearch}
+            failed={results.isError}
+            onSelect={showPage}
+          />
         )}
         {!selectedSpace && (
           <EmptyWorkspace onCreate={() => setNewSpaceOpen(true)} />
@@ -1010,8 +1085,20 @@ function Workspace({
             {repositories.isError && (
               <p role="alert">Could not load attached repositories.</p>
             )}
+            {refreshRepository.isError && (
+              <p role="alert">Could not refresh this repository. Please try again.</p>
+            )}
             {repositories.data?.map((repository) => (
-              <RepositoryCard key={repository.id} repository={repository} />
+              <RepositoryCard
+                key={repository.id}
+                repository={repository}
+                credentials={credentials}
+                refreshing={
+                  refreshRepository.isPending &&
+                  refreshRepository.variables?.id === repository.id
+                }
+                onRefresh={() => refreshRepository.mutate(repository)}
+              />
             ))}
             {repositories.data?.length === 0 && (
               <p className="muted">No GitHub repositories attached yet.</p>
@@ -1025,7 +1112,14 @@ function Workspace({
             page={selectedPage}
             spaceId={selectedPage.spaceId}
             credentials={credentials}
+            currentUserId={session.userId}
+            canModerateComments={selectedWorkspace?.role === 'OWNER'}
             saving={updatePage.isPending}
+            staleUpdate={
+              updatePage.error instanceof ApiRequestError &&
+              updatePage.error.problem.status === 412
+            }
+            reloading={reloadPage.isPending}
             saveError={
               updatePage.isError
                 ? updatePage.error instanceof Error
@@ -1034,6 +1128,7 @@ function Workspace({
                 : undefined
             }
             onSave={(input) => updatePage.mutateAsync(input)}
+            onReload={() => reloadPage.mutateAsync()}
             onEditingEnd={() => setEditingPageId(null)}
             onExitGuardChange={setEditorExitGuard}
             onRestore={(page) => {
@@ -1468,31 +1563,90 @@ function EmailVerificationScreen({
   );
 }
 
+function HighlightedSearchText({ text, query }: { text: string; query: string }) {
+  return (
+    <>
+      {searchTextParts(text, query).map((part, index) =>
+        part.highlighted ? <mark key={index}>{part.text}</mark> : part.text,
+      )}
+    </>
+  );
+}
+
+function SearchResults({
+  query,
+  pages,
+  loading,
+  failed,
+  onSelect,
+}: {
+  query: string;
+  pages: Page[];
+  loading: boolean;
+  failed: boolean;
+  onSelect: (page: Page) => void;
+}) {
+  return (
+    <section className="search-results" aria-live="polite" aria-label="Search results">
+      <strong>Search results</strong>
+      {loading && <p>Searching…</p>}
+      {!loading && failed && <p role="alert">Could not search pages. Please try again.</p>}
+      {!loading && !failed && pages.map((page) => {
+        const snippet = searchSnippet(page.plainText, query);
+        return (
+          <button key={page.id} className="search-result" onClick={() => onSelect(page)}>
+            <span className="search-result__title">
+              <HighlightedSearchText text={page.title} query={query} />
+            </span>
+            {snippet && (
+              <span className="search-result__snippet">
+                <HighlightedSearchText text={snippet} query={query} />
+              </span>
+            )}
+          </button>
+        );
+      })}
+      {!loading && !failed && pages.length === 0 && <p>No matching pages.</p>}
+    </section>
+  );
+}
+
 function PageTree({
   pages,
   onSelect,
+  compact = false,
+  selectedPageId,
 }: {
   pages: Page[];
   onSelect: (page: Page) => void;
+  compact?: boolean;
+  selectedPageId?: string;
 }) {
   const pagesByParent = new Map<string | null, Page[]>();
+  const pageIds = new Set(pages.map((page) => page.id));
   for (const page of pages) {
     const key =
-      page.parentId && pages.some((candidate) => candidate.id === page.parentId)
-        ? page.parentId
-        : null;
+      page.parentId && pageIds.has(page.parentId) ? page.parentId : null;
     pagesByParent.set(key, [...(pagesByParent.get(key) ?? []), page]);
   }
   const render = (parentId: string | null, depth: number): ReactNode =>
     pagesByParent.get(parentId)?.map((page) => (
       <div key={page.id}>
         <button
-          className="page-row"
+          className={compact ? 'page-tree-item' : 'page-row'}
+          aria-current={selectedPageId === page.id ? 'page' : undefined}
           onClick={() => onSelect(page)}
           style={{ paddingLeft: `${1 + depth * 1.25}rem` }}
+          title={compact ? page.title : undefined}
         >
-          <strong>{page.title}</strong>
-          <span>Updated {new Date(page.updatedAt).toLocaleString()}</span>
+          {compact ? (
+            <span>{page.title}</span>
+          ) : (
+            <>
+              <strong>{page.title}</strong>
+              <span>Updated {new Date(page.updatedAt).toLocaleString()}</span>
+            </>
+          )}
         </button>
         {render(page.id, depth + 1)}
       </div>
@@ -1943,7 +2097,30 @@ function RepositoryDialog({
   );
 }
 
-function RepositoryCard({ repository }: { repository: RepositoryBinding }) {
+function RepositoryCard({
+  repository,
+  credentials,
+  refreshing,
+  onRefresh,
+}: {
+  repository: RepositoryBinding;
+  credentials: Credentials;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const [sourcePath, setSourcePath] = useState('');
+  const javaDocs = useQuery({
+    queryKey: ['javadocs', repository.spaceId, repository.id],
+    queryFn: () => odocApi.listJavaDocs(credentials, repository.spaceId, repository.id),
+  });
+  const refreshJavaDocs = useMutation({
+    mutationFn: () => odocApi.refreshJavaDocs(
+      credentials, repository.spaceId, repository.id, sourcePath,
+    ),
+    onSuccess: () => void queryClient.invalidateQueries({
+      queryKey: ['javadocs', repository.spaceId, repository.id],
+    }),
+  });
   return (
     <article className="repository-card">
       <div className="repository-heading">
@@ -1956,6 +2133,9 @@ function RepositoryCard({ repository }: { repository: RepositoryBinding }) {
         <a href={repository.githubUrl} target="_blank" rel="noreferrer">
           Open on GitHub
         </a>
+        <button className="secondary" disabled={refreshing} onClick={onRefresh}>
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
       {repository.description && <p>{repository.description}</p>}
       <p className="muted">
@@ -1973,6 +2153,63 @@ function RepositoryCard({ repository }: { repository: RepositoryBinding }) {
           This repository does not have a readable README.
         </p>
       )}
+      <details className="javadoc-browser">
+        <summary>JavaDoc</summary>
+        <p className="muted">
+          Enter one relative Java path. Odoc only reads and parses this source; it never runs repository code.
+        </p>
+        <form
+          className="repository-javadoc-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            refreshJavaDocs.mutate();
+          }}
+        >
+          <label>
+            Java source path
+            <input
+              value={sourcePath}
+              onChange={(event) => setSourcePath(event.target.value)}
+              placeholder="src/main/java/example/Guide.java"
+              required
+            />
+          </label>
+          <button disabled={refreshJavaDocs.isPending || !sourcePath.trim()}>
+            {refreshJavaDocs.isPending ? 'Loading…' : 'Load JavaDoc'}
+          </button>
+        </form>
+        {refreshJavaDocs.isError && (
+          <p role="alert">Could not load JavaDoc for that source path.</p>
+        )}
+        {javaDocs.isPending && <p className="muted">Loading saved JavaDoc…</p>}
+        {javaDocs.isError && <p role="alert">Could not load saved JavaDoc.</p>}
+        {javaDocs.data?.map((snapshot) => (
+          <JavaDocType key={snapshot.id} snapshot={snapshot} />
+        ))}
+      </details>
+    </article>
+  );
+}
+
+export function JavaDocType({ snapshot }: { snapshot: JavaDocSnapshot }) {
+  return (
+    <article className="javadoc-type">
+      <p className="eyebrow">{snapshot.packageName || 'default package'}</p>
+      <h4>{snapshot.typeKind} {snapshot.typeName}</h4>
+      <p className="muted">{snapshot.sourcePath} · refreshed {new Date(snapshot.refreshedAt).toLocaleString()}</p>
+      {snapshot.documentation && <p>{snapshot.documentation}</p>}
+      {snapshot.members.map((member) => (
+        <section key={`${member.kind}-${member.signature}`} className="javadoc-member">
+          <strong>{member.kind} {member.name}</strong>
+          <code>{member.signature}</code>
+          {member.documentation && <p>{member.documentation}</p>}
+          {member.tags.map((tag) => (
+            <p key={`${tag.kind}-${tag.subject}`} className="muted">
+              @{tag.kind}{tag.subject ? ` ${tag.subject}` : ''}{tag.description ? ` — ${tag.description}` : ''}
+            </p>
+          ))}
+        </section>
+      ))}
     </article>
   );
 }
@@ -1982,9 +2219,14 @@ function PageEditor({
   page,
   spaceId,
   credentials,
+  currentUserId,
+  canModerateComments,
   saving,
+  staleUpdate,
+  reloading,
   saveError,
   onSave,
+  onReload,
   onEditingEnd,
   onExitGuardChange,
   onRestore,
@@ -1996,9 +2238,14 @@ function PageEditor({
   page: Page;
   spaceId: string;
   credentials: Credentials;
+  currentUserId: string;
+  canModerateComments: boolean;
   saving: boolean;
+  staleUpdate: boolean;
+  reloading: boolean;
   saveError?: string;
   onSave: (input: Pick<Page, 'title' | 'content'>) => Promise<Page>;
+  onReload: () => Promise<Page>;
   onEditingEnd: () => void;
   onExitGuardChange: (guard: EditorExitGuard | null) => void;
   onRestore: (page: Page) => void;
@@ -2101,6 +2348,22 @@ function PageEditor({
       onEditingEnd();
     } catch {
       // Keep the rich document mounted so the user can retry without data loss.
+    }
+  };
+
+  const reloadLatestPage = async () => {
+    if (saving || reloading) return;
+    try {
+      const latestPage = await onReload();
+      editorController.current?.discardUnpublishedAssets();
+      setTitle(latestPage.title);
+      setContent(latestPage.content);
+      setExitMessage(undefined);
+      setEditing(false);
+      onEditingEnd();
+    } catch {
+      // The surrounding mutation keeps its error visible; preserve this editor
+      // and its local content until a reload actually succeeds.
     }
   };
 
@@ -2221,6 +2484,15 @@ function PageEditor({
                   Could not publish this page: {saveError}
                 </p>
               )}
+              {staleUpdate && (
+                <button
+                  className="secondary"
+                  disabled={reloading || saving}
+                  onClick={() => void reloadLatestPage()}
+                >
+                  {reloading ? 'Reloading…' : 'Reload latest version'}
+                </button>
+              )}
               {exitMessage && (
                 <p className="editor-alert" role="alert">
                   {exitMessage}
@@ -2270,7 +2542,14 @@ function PageEditor({
             onRestore={(versionId) => restore.mutate(versionId)}
           />
         )}
-        {!editing && <Comments credentials={credentials} pageId={page.id} />}
+        {!editing && (
+          <Comments
+            credentials={credentials}
+            pageId={page.id}
+            currentUserId={currentUserId}
+            canModerate={canModerateComments}
+          />
+        )}
       </article>
     </section>
   );
@@ -2279,9 +2558,13 @@ function PageEditor({
 function Comments({
   credentials,
   pageId,
+  currentUserId,
+  canModerate,
 }: {
   credentials: Credentials;
   pageId: string;
+  currentUserId: string;
+  canModerate: boolean;
 }) {
   const [body, setBody] = useState('');
   const [replyTo, setReplyTo] = useState<string | undefined>();
@@ -2298,6 +2581,12 @@ function Comments({
       void queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
     },
   });
+  const remove = useMutation({
+    mutationFn: (commentId: string) =>
+      odocApi.deleteComment(credentials, pageId, commentId),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: ['comments', pageId] }),
+  });
   return (
     <section className="comments" aria-label="Page discussion">
       <h2>Discussion</h2>
@@ -2313,6 +2602,15 @@ function Comments({
           >
             Reply
           </button>
+          {(comment.authorId === currentUserId || canModerate) && (
+            <button
+              className="text-button danger-text"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(comment.id)}
+            >
+              Delete
+            </button>
+          )}
         </article>
       ))}
       <label>
@@ -2329,6 +2627,7 @@ function Comments({
         </button>
       )}
       {create.isError && <p role="alert">Could not add comment.</p>}
+      {remove.isError && <p role="alert">Could not delete comment.</p>}
       <button
         disabled={!body.trim() || create.isPending}
         onClick={() => create.mutate()}
@@ -2647,6 +2946,7 @@ export function App() {
             odoc<span>•</span>
           </Link>
         </header>
+        <OperationalStatus />
         <AppErrorBoundary>
             <AppRoutes
             home={

@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-    "/api/v1/pages/{pageId}": {
+    "/api/v1/spaces/{spaceId}": {
         parameters: {
             query?: never;
             header?: never;
@@ -20,7 +20,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/pages/{pageId}/favorite": {
+    "/api/v1/pages/{pageId}": {
         parameters: {
             query?: never;
             header?: never;
@@ -28,9 +28,25 @@ export interface paths {
             cookie?: never;
         };
         get: operations["get_1"];
-        put: operations["put"];
+        put: operations["update_1"];
         post?: never;
         delete: operations["delete_1"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{pageId}/favorite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_2"];
+        put: operations["put"];
+        post?: never;
+        delete: operations["delete_2"];
         options?: never;
         head?: never;
         patch?: never;
@@ -158,6 +174,38 @@ export interface paths {
         get: operations["list_2"];
         put?: never;
         post: operations["attach"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{spaceId}/repositories/{repositoryId}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{spaceId}/repositories/{repositoryId}/javadocs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["javaDocs"];
+        put?: never;
+        post: operations["refreshJavaDocs"];
         delete?: never;
         options?: never;
         head?: never;
@@ -411,13 +459,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["get_2"];
+        get: operations["get_3"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch: operations["update_1"];
+        patch: operations["update_2"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspaceId}/members/{memberId}": {
@@ -434,6 +482,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["updateMember"];
+        trace?: never;
+    };
+    "/api/v1/pages/{pageId}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["move"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspaceId}/audit-events": {
@@ -460,6 +524,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["info"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/spaces/{spaceId}/pages/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["tree"];
         put?: never;
         post?: never;
         delete?: never;
@@ -507,10 +587,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["get_3"];
+        get: operations["get_4"];
         put?: never;
         post?: never;
-        delete: operations["delete_2"];
+        delete: operations["delete_3"];
         options?: never;
         head?: never;
         patch?: never;
@@ -580,10 +660,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pages/{pageId}/comments/{commentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["delete_4"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        UpdateSpaceRequest: {
+            name: string;
+            description?: string;
+        };
+        SpaceResponse: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            workspaceId?: string;
+            key?: string;
+            name?: string;
+            description?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
         UpdatePageRequest: {
             title: string;
             content?: string;
@@ -595,8 +708,13 @@ export interface components {
             spaceId?: string;
             /** Format: uuid */
             parentId?: string;
+            /** Format: uuid */
+            authorId?: string;
             title?: string;
             content?: string;
+            plainText?: string;
+            /** Format: int64 */
+            revision?: number;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -667,19 +785,6 @@ export interface components {
             name: string;
             description?: string;
         };
-        SpaceResponse: {
-            /** Format: uuid */
-            id?: string;
-            /** Format: uuid */
-            workspaceId?: string;
-            key?: string;
-            name?: string;
-            description?: string;
-            /** Format: date-time */
-            createdAt?: string;
-            /** Format: date-time */
-            updatedAt?: string;
-        };
         AttachGithubRepositoryRequest: {
             url: string;
         };
@@ -699,6 +804,33 @@ export interface components {
             readmePath?: string;
             /** Format: date-time */
             syncedAt?: string;
+        };
+        RefreshJavaDocRequest: {
+            sourcePath: string;
+        };
+        JavaDocMember: {
+            kind?: string;
+            name?: string;
+            signature?: string;
+            documentation?: string;
+            tags?: components["schemas"]["JavaDocTag"][];
+        };
+        JavaDocSnapshotResponse: {
+            /** Format: uuid */
+            id?: string;
+            sourcePath?: string;
+            packageName?: string;
+            typeName?: string;
+            typeKind?: string;
+            documentation?: string;
+            members?: components["schemas"]["JavaDocMember"][];
+            /** Format: date-time */
+            refreshedAt?: string;
+        };
+        JavaDocTag: {
+            kind?: string;
+            subject?: string;
+            description?: string;
         };
         CreatePageRequest: {
             title: string;
@@ -729,6 +861,8 @@ export interface components {
             id?: string;
             /** Format: uuid */
             parentId?: string;
+            /** Format: uuid */
+            authorId?: string;
             author?: string;
             body?: string;
             /** Format: date-time */
@@ -781,6 +915,10 @@ export interface components {
             /** @enum {string} */
             role: "OWNER" | "MEMBER";
         };
+        MovePageRequest: {
+            /** Format: uuid */
+            parentId?: string;
+        };
         WorkspaceGroupMemberResponse: {
             /** Format: uuid */
             userId?: string;
@@ -812,6 +950,18 @@ export interface components {
             /** Format: date-time */
             timestamp?: string;
         };
+        PageTreeNode: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            parentId?: string;
+            title?: string;
+            /** Format: int64 */
+            revision?: number;
+            /** Format: date-time */
+            updatedAt?: string;
+            children?: components["schemas"]["PageTreeNode"][];
+        };
         PageVersionResponse: {
             /** Format: uuid */
             id?: string;
@@ -840,6 +990,74 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
+                spaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["SpaceResponse"];
+                };
+            };
+        };
+    };
+    update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                spaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSpaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["SpaceResponse"];
+                };
+            };
+        };
+    };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                spaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
                 pageId: string;
             };
             cookie?: never;
@@ -857,10 +1075,13 @@ export interface operations {
             };
         };
     };
-    update: {
+    update_1: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Current page revision ETag. */
+                "If-Match": string;
+            };
             path: {
                 pageId: string;
             };
@@ -883,7 +1104,7 @@ export interface operations {
             };
         };
     };
-    delete: {
+    delete_1: {
         parameters: {
             query?: never;
             header?: never;
@@ -903,7 +1124,7 @@ export interface operations {
             };
         };
     };
-    get_1: {
+    get_2: {
         parameters: {
             query?: never;
             header?: never;
@@ -947,7 +1168,7 @@ export interface operations {
             };
         };
     };
-    delete_1: {
+    delete_2: {
         parameters: {
             query?: never;
             header?: never;
@@ -1315,6 +1536,79 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["RepositoryBindingResponse"];
+                };
+            };
+        };
+    };
+    refresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                spaceId: string;
+                repositoryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["RepositoryBindingResponse"];
+                };
+            };
+        };
+    };
+    javaDocs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                spaceId: string;
+                repositoryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["JavaDocSnapshotResponse"][];
+                };
+            };
+        };
+    };
+    refreshJavaDocs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                spaceId: string;
+                repositoryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshJavaDocRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["JavaDocSnapshotResponse"];
                 };
             };
         };
@@ -1705,7 +1999,7 @@ export interface operations {
             };
         };
     };
-    get_2: {
+    get_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -1727,7 +2021,7 @@ export interface operations {
             };
         };
     };
-    update_1: {
+    update_2: {
         parameters: {
             query?: never;
             header: {
@@ -1803,6 +2097,32 @@ export interface operations {
             };
         };
     };
+    move: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MovePageRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PageResponse"];
+                };
+            };
+        };
+    };
     page: {
         parameters: {
             query?: {
@@ -1844,6 +2164,28 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["SystemInfoResponse"];
+                };
+            };
+        };
+    };
+    tree: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                spaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PageTreeNode"][];
                 };
             };
         };
@@ -1892,7 +2234,7 @@ export interface operations {
             };
         };
     };
-    get_3: {
+    get_4: {
         parameters: {
             query?: never;
             header?: never;
@@ -1914,7 +2256,7 @@ export interface operations {
             };
         };
     };
-    delete_2: {
+    delete_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -2010,6 +2352,27 @@ export interface operations {
         responses: {
             /** @description OK */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_4: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pageId: string;
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };

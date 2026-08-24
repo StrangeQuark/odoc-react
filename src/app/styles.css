@@ -107,6 +107,31 @@ body {
   min-width: 320px;
 }
 
+.operational-banner {
+  background: var(--color-highlight);
+  border-bottom: 1px solid var(--color-highlight-border);
+  color: var(--color-text);
+  font-size: 0.9rem;
+  padding: 0.55rem 1rem;
+  text-align: center;
+}
+
+.release-label {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  opacity: 0.8;
+  position: fixed;
+  right: 0.65rem;
+  bottom: 0.5rem;
+  z-index: 2;
+}
+
+.support-detail {
+  color: var(--color-text-subtle);
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+}
+
 button,
 input,
 textarea,
@@ -359,6 +384,41 @@ button.button--danger:hover {
   font-size: 1rem;
   line-height: 1;
   padding: 0.2rem 0.48rem;
+}
+
+.sidebar-page-section {
+  border-top: 1px solid var(--color-border);
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+}
+
+.sidebar-page-heading {
+  margin-bottom: 0.3rem;
+}
+
+.page-tree-item {
+  background: transparent;
+  border: 0;
+  color: var(--color-text);
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 550;
+  margin-top: 0.12rem;
+  min-width: 0;
+  overflow: hidden;
+  padding-bottom: 0.42rem;
+  padding-right: 0.45rem;
+  padding-top: 0.42rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.page-tree-item:hover,
+.page-tree-item[aria-current='page'] {
+  background: var(--color-surface-selected);
+  color: var(--color-interactive-hover);
 }
 
 .nav-item {
@@ -888,6 +948,59 @@ button.button--danger:hover {
   font-weight: 750;
 }
 
+.javadoc-browser {
+  border-top: 1px solid var(--color-border);
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+}
+
+.repository-javadoc-form {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.repository-javadoc-form label {
+  color: var(--color-text-subtle);
+  flex: 1 1 18rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.repository-javadoc-form input {
+  margin-top: 0.2rem;
+  width: 100%;
+}
+
+.javadoc-type {
+  border-top: 1px solid var(--color-border);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.javadoc-type h4 {
+  margin: 0.15rem 0;
+}
+
+.javadoc-member {
+  background: var(--color-surface-subtle);
+  border-radius: 0.35rem;
+  margin-top: 0.65rem;
+  padding: 0.7rem;
+}
+
+.javadoc-member code {
+  display: block;
+  font-size: 0.82rem;
+  margin-top: 0.3rem;
+  overflow-wrap: anywhere;
+}
+
+.javadoc-member p {
+  margin-bottom: 0;
+}
+
 .search-results {
   background: var(--color-highlight);
   border: 1px solid var(--color-highlight-border);
@@ -902,8 +1015,32 @@ button.button--danger:hover {
   border: 0;
   color: #0c66e4;
   display: block;
-  padding: 0.4rem 0;
+  padding: 0.45rem 0;
   text-align: left;
+  width: 100%;
+}
+
+.search-result__title,
+.search-result__snippet {
+  display: block;
+}
+
+.search-result__title {
+  font-weight: 700;
+}
+
+.search-result__snippet {
+  color: var(--color-text-subtle);
+  font-size: 0.88rem;
+  line-height: 1.4;
+  margin-top: 0.12rem;
+}
+
+.search-results mark {
+  background: #fff0b3;
+  border-radius: 0.15rem;
+  color: inherit;
+  padding: 0 0.08em;
 }
 
 .dialog {
@@ -1794,6 +1931,9 @@ input.visually-hidden[hidden] {
     max-height: 12rem;
   }
   .sidebar-heading {
+    width: 100%;
+  }
+  .sidebar-page-section {
     width: 100%;
   }
   .nav-item {

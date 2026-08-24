@@ -3,6 +3,17 @@
 React/Vite frontend for Odoc. The local development application is served through the
 Docker Compose stack in the sibling `odoc` repository.
 
+## Quick start
+
+From the parent folder containing both repositories:
+
+```bash
+docker compose -f odoc/deploy/local/compose.yml -f odoc/deploy/local/compose.app.yml up --build --force-recreate
+```
+
+Open <http://localhost:8081>. Create an email/password account and then sign in. To require
+an invitation code for every new account, prefix the command with `ODOC_AUTH_INVITE_ONLY=true`.
+
 ## Local checks
 
 From this directory, use Corepack's pinned pnpm release:
@@ -36,9 +47,9 @@ OpenAPI contract** in GitHub Actions with the JSON artifact and matching manifes
 It verifies both, regenerates the client, and opens a reviewable update PR; it has no
 schedule and cannot change the repository unless an authorized maintainer runs it.
 
-The MVP currently uses a development-only shared login. The next authentication milestone
-introduces invite-only email/password accounts and secure sessions; OIDC/SSO providers
-will be optional additions.
+The MVP uses normal email/password accounts with secure cookie sessions. Local Compose permits
+registration by default; `ODOC_AUTH_INVITE_ONLY=true` requires a one-time workspace invitation
+code for each new account. OIDC/SSO providers remain optional future additions.
 
 ## Supported browser checks
 
