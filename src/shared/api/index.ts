@@ -93,8 +93,11 @@ export type Page = {
   id: string;
   spaceId: string;
   parentId: string | null;
+  authorId: string | null;
   title: string;
   content: string;
+  plainText: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -110,6 +113,7 @@ export type PageVersion = {
 export type PageComment = {
   id: string;
   parentId: string | null;
+  authorId: string | null;
   author: string;
   body: string;
   createdAt: string;
@@ -127,6 +131,31 @@ export type RepositoryBinding = {
   readmeContent: string;
   readmePath: string;
   syncedAt: string;
+};
+
+export type JavaDocTag = {
+  kind: string;
+  subject: string;
+  description: string;
+};
+
+export type JavaDocMember = {
+  kind: string;
+  name: string;
+  signature: string;
+  documentation: string;
+  tags: JavaDocTag[];
+};
+
+export type JavaDocSnapshot = {
+  id: string;
+  sourcePath: string;
+  packageName: string;
+  typeName: string;
+  typeKind: string;
+  documentation: string;
+  members: JavaDocMember[];
+  refreshedAt: string;
 };
 
 export type MediaAsset = {
@@ -194,6 +223,25 @@ export class ApiRequestError extends Error {
   }
 }
 
+/** Safe for UI/support text: never includes a response body, URL query, stack, or credentials. */
+export function supportDetails(error: unknown, release?: string): string | null {
+  if (!(error instanceof ApiRequestError)) return release ? `Release: ${release}` : null;
+  const parts = [
+    error.problem.requestId ? `Request ID: ${error.problem.requestId}` : null,
+    release ? `Release: ${release}` : null,
+  ].filter((value): value is string => value !== null);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/** Returns an absolute retry time for a standard delta-seconds Retry-After value. */
+export function retryAfterTime(error: unknown, now = Date.now()): number | null {
+  if (!(error instanceof ApiRequestError) || error.problem.status !== 429) return null;
+  const seconds = Number(error.retryAfter);
+  return Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 86_400
+    ? now + seconds * 1000
+    : null;
+}
+
 /**
  * The server contract is generated from the committed OpenAPI snapshot. Keep
  * the application model strict at this boundary: springdoc presently marks
@@ -210,6 +258,7 @@ type ContractPage = ContractSchemas['PageResponse'];
 type ContractPageVersion = ContractSchemas['PageVersionResponse'];
 type ContractComment = ContractSchemas['PageCommentResponse'];
 type ContractRepository = ContractSchemas['RepositoryBindingResponse'];
+type ContractJavaDocSnapshot = ContractSchemas['JavaDocSnapshotResponse'];
 type ContractMedia = ContractSchemas['MediaAssetResponse'];
 type ContractSystemInfo = ContractSchemas['SystemInfoResponse'];
 type ContractRegistrationPolicy = ContractSchemas['RegistrationPolicyResponse'];
@@ -427,8 +476,11 @@ function toPage(value: ContractPage): Page {
     id: requiredString(value.id, 'page.id'),
     spaceId: requiredString(value.spaceId, 'page.spaceId'),
     parentId: value.parentId ?? null,
+    authorId: value.authorId ?? null,
     title: requiredString(value.title, 'page.title'),
     content: value.content ?? '',
+    plainText: value.plainText ?? '',
+    revision: requiredNumber(value.revision, 'page.revision'),
     createdAt: requiredString(value.createdAt, 'page.createdAt'),
     updatedAt: requiredString(value.updatedAt, 'page.updatedAt'),
   };
@@ -451,6 +503,7 @@ function toComment(value: ContractComment): PageComment {
   return {
     id: requiredString(value.id, 'comment.id'),
     parentId: value.parentId ?? null,
+    authorId: value.authorId ?? null,
     author: requiredString(value.author, 'comment.author'),
     body: requiredString(value.body, 'comment.body'),
     createdAt: requiredString(value.createdAt, 'comment.createdAt'),
@@ -470,6 +523,29 @@ function toRepository(value: ContractRepository): RepositoryBinding {
     readmeContent: value.readmeContent ?? '',
     readmePath: value.readmePath ?? '',
     syncedAt: requiredString(value.syncedAt, 'repository.syncedAt'),
+  };
+}
+
+function toJavaDocSnapshot(value: ContractJavaDocSnapshot): JavaDocSnapshot {
+  return {
+    id: requiredString(value.id, 'javaDoc.id'),
+    sourcePath: requiredString(value.sourcePath, 'javaDoc.sourcePath'),
+    packageName: value.packageName ?? '',
+    typeName: requiredString(value.typeName, 'javaDoc.typeName'),
+    typeKind: requiredString(value.typeKind, 'javaDoc.typeKind'),
+    documentation: value.documentation ?? '',
+    members: (value.members ?? []).map((member, index) => ({
+      kind: requiredString(member.kind, `javaDoc.members[${index}].kind`),
+      name: requiredString(member.name, `javaDoc.members[${index}].name`),
+      signature: requiredString(member.signature, `javaDoc.members[${index}].signature`),
+      documentation: member.documentation ?? '',
+      tags: (member.tags ?? []).map((tag, tagIndex) => ({
+        kind: requiredString(tag.kind, `javaDoc.members[${index}].tags[${tagIndex}].kind`),
+        subject: tag.subject ?? '',
+        description: tag.description ?? '',
+      })),
+    })),
+    refreshedAt: requiredString(value.refreshedAt, 'javaDoc.refreshedAt'),
   };
 }
 
@@ -871,10 +947,12 @@ export const odocApi = {
     apiFetch<ContractPage[]>(`/spaces/${spaceId}/pages`, credentials).then(
       (items) => items.map(toPage),
     ),
+  getPage: (credentials: Credentials, pageId: string) =>
+    apiFetch<ContractPage>(`/pages/${pageId}`, credentials).then(toPage),
   createPage: (
     credentials: Credentials,
     spaceId: string,
-    input: Pick<Page, 'title' | 'content'>,
+    input: Pick<Page, 'title' | 'content'> & { parentId?: string | null },
   ) =>
     apiFetch<ContractPage>(`/spaces/${spaceId}/pages`, credentials, {
       method: 'POST',
@@ -883,10 +961,12 @@ export const odocApi = {
   updatePage: (
     credentials: Credentials,
     pageId: string,
+    revision: number,
     input: Pick<Page, 'title' | 'content'>,
   ) =>
     apiFetch<ContractPage>(`/pages/${pageId}`, credentials, {
       method: 'PUT',
+      headers: { 'If-Match': `"revision-${revision}"` },
       body: JSON.stringify(input),
     }).then(toPage),
   deletePage: (credentials: Credentials, pageId: string) =>
@@ -925,6 +1005,10 @@ export const odocApi = {
       method: 'POST',
       body: JSON.stringify(input),
     }).then(toComment),
+  deleteComment: (credentials: Credentials, pageId: string, commentId: string) =>
+    apiFetch<void>(`/pages/${pageId}/comments/${commentId}`, credentials, {
+      method: 'DELETE',
+    }),
   search: (credentials: Credentials, query: string, signal?: AbortSignal) =>
     apiFetch<ContractPage[]>(
       `/search?q=${encodeURIComponent(query)}`,
@@ -945,6 +1029,32 @@ export const odocApi = {
         body: JSON.stringify({ url }),
       },
     ).then(toRepository),
+  refreshRepository: (
+    credentials: Credentials,
+    spaceId: string,
+    repositoryId: string,
+  ) =>
+    apiFetch<ContractRepository>(
+      `/spaces/${spaceId}/repositories/${repositoryId}/refresh`,
+      credentials,
+      { method: 'POST' },
+    ).then(toRepository),
+  listJavaDocs: (credentials: Credentials, spaceId: string, repositoryId: string) =>
+    apiFetch<ContractJavaDocSnapshot[]>(
+      `/spaces/${spaceId}/repositories/${repositoryId}/javadocs`,
+      credentials,
+    ).then((items) => items.map(toJavaDocSnapshot)),
+  refreshJavaDocs: (
+    credentials: Credentials,
+    spaceId: string,
+    repositoryId: string,
+    sourcePath: string,
+  ) =>
+    apiFetch<ContractJavaDocSnapshot>(
+      `/spaces/${spaceId}/repositories/${repositoryId}/javadocs`,
+      credentials,
+      { method: 'POST', body: JSON.stringify({ sourcePath }) },
+    ).then(toJavaDocSnapshot),
   uploadMedia: (credentials: Credentials, spaceId: string, file: File) => {
     const form = new FormData();
     form.append('file', file);

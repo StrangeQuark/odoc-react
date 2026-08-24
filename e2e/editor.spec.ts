@@ -24,7 +24,7 @@ async function createEditablePage(page: Page, label: string) {
     .fill(`ED${Math.random().toString(36).slice(2, 12).toUpperCase()}`);
   await page.getByLabel('Name').fill(`Editor ${suffix}`);
   await page.getByRole('button', { name: 'Create space' }).last().click();
-  await page.getByRole('button', { name: 'New page' }).click();
+  await page.getByRole('button', { name: 'New page', exact: true }).click();
   await page.getByLabel('Title').fill(`Editor page ${suffix}`);
   await page.getByRole('button', { name: 'Create page' }).click();
   return page.getByLabel('Document content');
@@ -68,6 +68,40 @@ test('keeps an unsaved editor open when logout navigation is dismissed', async (
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+});
+
+test('offers a safe reload when another editor has saved first', async ({
+  authenticatedPage: page,
+}) => {
+  test.setTimeout(45_000);
+  const editor = await createEditablePage(page, 'stale-update');
+
+  await editor.fill('Local unpublished revision');
+  await page.route('**/api/v1/pages/*', async (route) => {
+    if (route.request().method() !== 'PUT') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 412,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({
+        title: 'Precondition Failed',
+        status: 412,
+        detail: 'This page has a newer revision.',
+      }),
+    });
+  });
+
+  await page.getByRole('button', { name: 'Publish changes' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Reload latest version' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Reload latest version' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Edit', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('Local unpublished revision')).toHaveCount(0);
 });
 
 test('blocks workspace navigation while media is uploading', async ({
@@ -176,8 +210,13 @@ test('imports media through the picker and persists caption and positioning', as
           ".odoc-media-node[data-media-kind='image'][data-media-align='right']",
         )
         .evaluate((element) => getComputedStyle(element).float),
-    )
+  )
     .toBe('none');
+  await page.reload();
+  await page.locator('.sidebar .nav-item').first().click();
+  await page.locator('.sidebar .page-tree-item').first().click();
+  await expect(page.getByText('Odoc architecture overview')).toBeVisible();
+  await expect(page.locator('.document-media--right')).toBeVisible();
 });
 
 test('moves selected media with keyboard-accessible controls', async ({
