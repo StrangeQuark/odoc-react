@@ -87,6 +87,7 @@ const queryClient = new QueryClient({
  * follows the same safety rule.
  */
 type EditorExitGuard = () => boolean;
+type ThemePreference = 'system' | 'light' | 'dark';
 
 const AUTH_LOGOUT_STORAGE_KEY = 'odoc.auth.logout';
 
@@ -629,8 +630,16 @@ function Workspace({
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [accountOpen, setAccountOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [verificationOpen, setVerificationOpen] = useState(false);
+  const [navigationOpen, setNavigationOpen] = useState(true);
+  const [theme, setTheme] = useState<ThemePreference>(() => {
+    const stored = window.localStorage.getItem('odoc.theme');
+    return stored === 'light' || stored === 'dark' || stored === 'system'
+      ? stored
+      : 'system';
+  });
   const editorExitGuard = useRef<EditorExitGuard | null>(null);
   const setEditorExitGuard = useCallback((guard: EditorExitGuard | null) => {
     editorExitGuard.current = guard;
@@ -699,11 +708,14 @@ function Workspace({
     ),
     enabled: membersOpen && selectedWorkspace?.role === 'OWNER' && selectedGroup !== null,
   });
-  const systemInfo = useQuery({
-    queryKey: ['system-info'],
-    queryFn: ({ signal }) => odocApi.systemInfo(credentials, signal),
-    retry: false,
-  });
+  useEffect(() => {
+    if (theme === 'system') {
+      delete document.documentElement.dataset.theme;
+    } else {
+      document.documentElement.dataset.theme = theme;
+    }
+    window.localStorage.setItem('odoc.theme', theme);
+  }, [theme]);
   const pages = useQuery({
     queryKey: ['pages', selectedSpace?.id],
     queryFn: () => odocApi.listPages(credentials, selectedSpace!.id),
@@ -926,11 +938,118 @@ function Workspace({
   };
 
   return (
-    <main id="main-content" className="workspace-shell">
+    <main
+      id="main-content"
+      className={`workspace-shell ${navigationOpen ? 'navigation-open' : 'navigation-closed'}`}
+    >
       <DocumentMetadata
         title={selectedPage?.title ?? selectedSpace?.name ?? 'Workspace'}
       />
-      <aside className="sidebar" aria-label="Spaces">
+      <header className="app-header">
+        <div className="app-header__left">
+          <button
+            type="button"
+            className="header-icon-button"
+            aria-label={navigationOpen ? 'Collapse navigation' : 'Expand navigation'}
+            aria-expanded={navigationOpen}
+            aria-controls="workspace-navigation"
+            onClick={() => setNavigationOpen((open) => !open)}
+          >
+            <span aria-hidden="true">☰</span>
+          </button>
+          <Link to="/" className="brand" aria-label="Odoc home">
+            odoc<span>•</span>
+          </Link>
+          <label className="workspace-switcher">
+            <span className="visually-hidden">Workspace</span>
+            <select
+              aria-label="Workspace"
+              value={selectedWorkspace?.id ?? ''}
+              onChange={(event) => {
+                if (!canLeavePageEditor()) return;
+                const workspaceId = event.target.value;
+                setSelectedWorkspaceId(workspaceId);
+                setSelectedSpace(
+                  spaces.data?.find((space) => space.workspaceId === workspaceId) ?? null,
+                );
+                setSelectedPage(null);
+                setEditingPageId(null);
+              }}
+            >
+              {workspaces.data?.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+              ))}
+            </select>
+          </label>
+          <button className="header-quiet-action header-new-workspace" onClick={() => setNewWorkspaceOpen(true)}>
+            New workspace
+          </button>
+        </div>
+        <label className="header-search">
+          <span className="visually-hidden">Search pages</span>
+          <span aria-hidden="true" className="header-search__icon">⌕</span>
+          <input
+            aria-label="Search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search pages"
+            type="search"
+          />
+        </label>
+        <div className="app-header__right">
+          {!session.emailVerified && (
+            <button className="header-quiet-action header-verify-email" onClick={() => setVerificationOpen(true)}>
+              Verify email
+            </button>
+          )}
+          {selectedWorkspace?.role === 'OWNER' && (
+            <>
+              <button className="header-quiet-action header-people" onClick={() => setMembersOpen(true)}>People</button>
+              <button className="header-quiet-action header-workspace-settings" onClick={() => setWorkspaceSettingsOpen(true)}>Workspace settings</button>
+            </>
+          )}
+          <div className="account-menu">
+            <button
+              className="account-trigger"
+              type="button"
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => setAccountMenuOpen((open) => !open)}
+            >
+              <span className="account-avatar" aria-hidden="true">{session.email.slice(0, 1).toUpperCase()}</span>
+              <span className="account-trigger__label">Account</span>
+              <span aria-hidden="true">⌄</span>
+            </button>
+            {accountMenuOpen && (
+              <div className="account-menu__panel" role="menu" aria-label="Account options">
+                <p className="account-menu__identity">{session.email}</p>
+                <button type="button" role="menuitem" onClick={() => { setAccountSettingsOpen(true); setAccountMenuOpen(false); }}>
+                  Settings
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    if (canLeavePageEditor()) onLogout();
+                  }}
+                >
+                  Log out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+      {navigationOpen && (
+        <button
+          type="button"
+          className="navigation-scrim"
+          aria-label="Close navigation"
+          onClick={() => setNavigationOpen(false)}
+        />
+      )}
+      <aside id="workspace-navigation" className="sidebar" aria-label="Spaces">
         <div className="sidebar-heading">
           <span>Spaces</span>
           <button
@@ -981,72 +1100,6 @@ function Workspace({
         )}
       </aside>
       <section className="workspace-content">
-        <div className="toolbar">
-          <label className="workspace-switcher">
-            Workspace
-            <select
-              value={selectedWorkspace?.id ?? ''}
-              onChange={(event) => {
-                if (!canLeavePageEditor()) return;
-                const workspaceId = event.target.value;
-                setSelectedWorkspaceId(workspaceId);
-                setSelectedSpace(
-                  spaces.data?.find((space) => space.workspaceId === workspaceId) ?? null,
-                );
-                setSelectedPage(null);
-                setEditingPageId(null);
-              }}
-            >
-              {workspaces.data?.map((workspace) => (
-                <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
-              ))}
-            </select>
-          </label>
-          <button className="secondary" onClick={() => setNewWorkspaceOpen(true)}>
-            New workspace
-          </button>
-          <label className="search-box">
-            Search
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search pages"
-            />
-          </label>
-          {systemInfo.data?.status === 'ok' && (
-            <span className="service-status" role="status">
-              {systemInfo.data.name} API connected
-            </span>
-          )}
-          {!session.emailVerified && (
-            <div className="verification-notice" role="status">
-              <span>Verify your email to secure your account.</span>
-              <button
-                className="secondary"
-                onClick={() => setVerificationOpen(true)}
-              >
-                Verify email
-              </button>
-            </div>
-          )}
-          {selectedWorkspace?.role === 'OWNER' && (
-            <>
-              <button className="secondary" onClick={() => setMembersOpen(true)}>People</button>
-              <button className="secondary" onClick={() => setWorkspaceSettingsOpen(true)}>Workspace settings</button>
-            </>
-          )}
-          <button className="secondary" onClick={() => setAccountOpen(true)}>
-            Account
-          </button>
-          <button
-            className="secondary"
-            onClick={() => {
-              if (canLeavePageEditor()) onLogout();
-            }}
-          >
-            Log out
-          </button>
-        </div>
         {search.trim().length >= 2 && (
           <SearchResults
             query={search}
@@ -1281,13 +1334,15 @@ function Workspace({
           onSubmit={(name) => updateWorkspace.mutate({ name })}
         />
       )}
-      {accountOpen && (
-        <AccountSecurityDialog
+      {accountSettingsOpen && (
+        <AccountSettingsDialog
           email={session.email}
-          onClose={() => setAccountOpen(false)}
+          theme={theme}
+          onThemeChange={setTheme}
+          onClose={() => setAccountSettingsOpen(false)}
           onSubmit={async (input) => {
             await onPasswordChange(input);
-            setAccountOpen(false);
+            setAccountSettingsOpen(false);
           }}
         />
       )}
@@ -1318,12 +1373,16 @@ function EmptyWorkspace({ onCreate }: { onCreate: () => void }) {
   );
 }
 
-function AccountSecurityDialog({
+function AccountSettingsDialog({
   email,
+  theme,
+  onThemeChange,
   onClose,
   onSubmit,
 }: {
   email: string;
+  theme: ThemePreference;
+  onThemeChange: (theme: ThemePreference) => void;
   onClose: () => void;
   onSubmit: (input: PasswordChange) => Promise<void>;
 }) {
@@ -1337,86 +1396,86 @@ function AccountSecurityDialog({
     <Dialog
       isOpen
       onClose={onClose}
-      className="dialog account-dialog"
-      title="Account security"
+      className="dialog account-settings-dialog"
+      title="Account settings"
     >
-      <form
-        className="stack-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setError(null);
-          if (newPassword !== confirmation) {
-            setError('The new passwords do not match.');
-            return;
-          }
-          setBusy(true);
-          void onSubmit({ currentPassword, newPassword })
-            .catch((reason: unknown) => {
-              setError(
-                reason instanceof Error
-                  ? reason.message
-                  : 'Could not change your password. Please try again.',
-              );
-            })
-            .finally(() => setBusy(false));
-        }}
-      >
-        <p className="muted">
-          Signed in as <strong>{email}</strong>
-        </p>
-        <FormField id="current-password" label="Current password">
-          <input
-            id="current-password"
-            type="password"
-            autoComplete="current-password"
-            value={currentPassword}
-            onChange={(event) => setCurrentPassword(event.target.value)}
-            required
-          />
-        </FormField>
-        <FormField id="new-password" label="New password">
-          <input
-            id="new-password"
-            type="password"
-            autoComplete="new-password"
-            minLength={12}
-            maxLength={128}
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-            required
-          />
-        </FormField>
-        <FormField id="confirm-password" label="Confirm new password">
-          <input
-            id="confirm-password"
-            type="password"
-            autoComplete="new-password"
-            minLength={12}
-            maxLength={128}
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            required
-          />
-        </FormField>
-        <p className="muted">
-          Changing your password signs out every existing browser session and
-          keeps this browser signed in with a new session.
-        </p>
-        {error && <p role="alert">{error}</p>}
-        <div className="dialog-actions">
-          <button
-            type="button"
-            className="secondary"
-            onClick={onClose}
-            disabled={busy}
+      <div className="account-settings">
+        <section className="account-settings__section">
+          <div>
+            <p className="eyebrow">Profile</p>
+            <h3>Email address</h3>
+            <p className="muted">{email}</p>
+          </div>
+          <p className="account-settings__hint">
+            Your sign-in email is managed by your account administrator. Email changes will be available here when that account feature is enabled.
+          </p>
+        </section>
+        <section className="account-settings__section">
+          <div>
+            <p className="eyebrow">Appearance</p>
+            <h3>Color theme</h3>
+            <p className="muted">Choose how Odoc looks on this device.</p>
+          </div>
+          <div className="theme-options" role="radiogroup" aria-label="Color theme">
+            {([
+              ['system', 'Use system'],
+              ['light', 'Light'],
+              ['dark', 'Dark'],
+            ] as const).map(([value, label]) => (
+              <button
+                type="button"
+                key={value}
+                role="radio"
+                aria-checked={theme === value}
+                className={theme === value ? 'active' : ''}
+                onClick={() => onThemeChange(value)}
+              >
+                <span className={`theme-preview theme-preview--${value}`} aria-hidden="true" />
+                {label}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="account-settings__section account-settings__security">
+          <div>
+            <p className="eyebrow">Security</p>
+            <h3>Change password</h3>
+            <p className="muted">Use a unique password with at least 12 characters.</p>
+          </div>
+          <form
+            className="stack-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setError(null);
+              if (newPassword !== confirmation) {
+                setError('The new passwords do not match.');
+                return;
+              }
+              setBusy(true);
+              void onSubmit({ currentPassword, newPassword })
+                .catch((reason: unknown) => {
+                  setError(reason instanceof Error ? reason.message : 'Could not change your password. Please try again.');
+                })
+                .finally(() => setBusy(false));
+            }}
           >
-            Cancel
-          </button>
-          <button disabled={busy}>
-            {busy ? 'Saving…' : 'Change password'}
-          </button>
-        </div>
-      </form>
+            <FormField id="current-password" label="Current password">
+              <input id="current-password" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
+            </FormField>
+            <FormField id="new-password" label="New password">
+              <input id="new-password" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+            </FormField>
+            <FormField id="confirm-password" label="Confirm new password">
+              <input id="confirm-password" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required />
+            </FormField>
+            {error && <p role="alert">{error}</p>}
+            <div className="dialog-actions">
+              <button type="button" className="secondary" onClick={onClose} disabled={busy}>Close</button>
+              <button disabled={busy}>{busy ? 'Saving…' : 'Change password'}</button>
+            </div>
+          </form>
+        </section>
+      </div>
     </Dialog>
   );
 }
@@ -2941,11 +3000,13 @@ export function App() {
         <a className="skip-link" href="#main-content">
           Skip to content
         </a>
-        <header className="site-header">
-          <Link to="/" className="brand" aria-label="Odoc home">
-            odoc<span>•</span>
-          </Link>
-        </header>
+        {!(authState === 'ready' && credentials && session?.emailVerified) && (
+          <header className="site-header">
+            <Link to="/" className="brand" aria-label="Odoc home">
+              odoc<span>•</span>
+            </Link>
+          </header>
+        )}
         <OperationalStatus />
         <AppErrorBoundary>
             <AppRoutes

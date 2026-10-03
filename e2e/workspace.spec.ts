@@ -60,3 +60,21 @@ test('creates, edits, and deletes a documentation page', async ({
   await page.getByRole('button', { name: 'Delete page' }).click();
   await expect(page.getByRole('heading', { name: 'Pages' })).toBeVisible();
 });
+
+test('keeps navigation, account settings, and explicit theme controls discoverable', async ({
+  authenticatedPage: page,
+}) => {
+  await page.getByRole('button', { name: /Account/ }).click();
+  const menu = page.getByRole('menu', { name: 'Account options' });
+  await expect(menu).toContainText('Settings');
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await expect(page.getByRole('dialog', { name: 'Account settings' })).toBeVisible();
+  await page.getByRole('radio', { name: 'Dark' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.getByRole('button', { name: 'Close' }).click();
+
+  await page.getByRole('button', { name: 'Collapse navigation' }).click();
+  await expect(page.locator('.workspace-shell')).toHaveClass(/navigation-closed/);
+  await page.getByRole('button', { name: 'Expand navigation' }).click();
+  await expect(page.locator('.workspace-shell')).toHaveClass(/navigation-open/);
+});
