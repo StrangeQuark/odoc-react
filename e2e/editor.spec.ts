@@ -14,6 +14,11 @@ const tinyWebm = Buffer.from(
   'base64',
 );
 
+async function logOutFromAccountMenu(page: Page) {
+  await page.getByRole('button', { name: /Account/ }).click();
+  await page.getByRole('menuitem', { name: 'Log out' }).click();
+}
+
 async function createEditablePage(page: Page, label: string) {
   // Fully-parallel browser runs can start within the same millisecond. Keep
   // fixture data unique without sharing a mutable test counter between workers.
@@ -61,12 +66,12 @@ test('keeps an unsaved editor open when logout navigation is dismissed', async (
   await expect(page.getByText('Unsaved changes')).toBeVisible();
 
   page.once('dialog', (dialog) => dialog.dismiss());
-  await page.getByRole('button', { name: 'Log out' }).click();
+  await logOutFromAccountMenu(page);
   await expect(editor).toBeVisible();
   await expect(editor).toContainText('Keep this unpublished change');
 
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: 'Log out' }).click();
+  await logOutFromAccountMenu(page);
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
 });
 
@@ -122,7 +127,7 @@ test('blocks workspace navigation while media is uploading', async ({
   });
   await expect(page.getByText('Uploading uploading.png…')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Log out' }).click();
+  await logOutFromAccountMenu(page);
   await expect(
     page.getByText(
       'Media is still uploading. Wait for all uploads to finish before leaving this page.',
